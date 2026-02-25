@@ -8,6 +8,11 @@ import { popupStateManager } from './utils/popupStateManager';
 // Debug log
 console.log(`DeepSeek AI: Content script injected on ${window.location.href}`);
 
+// Regent: Coding agent orchestrator (only on Happy Engineering)
+if (location.hostname === 'app.happy.engineering') {
+  import('./regent/RegentOrchestrator').then(m => m.init());
+}
+
 // State
 let isSelectionEnabled = true;
 

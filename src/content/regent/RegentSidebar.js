@@ -1,0 +1,303 @@
+/**
+ * RegentSidebar — Right sidebar UI for coding agent oversight
+ *
+ * Shadow DOM isolated. Shows key events per session.
+ * Click-to-scroll with highlight animation. Collapsible. Theme-aware.
+ */
+
+import { isDarkMode } from '../utils/themeManager';
+import regentCSS from './regent.css?raw';
+
+const HIGHLIGHT_DURATION = 1500;
+
+export class RegentSidebar {
+  constructor() {
+    this.host = null;
+    this.shadow = null;
+    this.sidebar = null;
+    this.sessionsContainer = null;
+    this.metaEl = null;
+    this._collapsed = false;
+    this._sessionElements = new Map(); // sessionId → DOM section
+    this._themeObserver = null;
+  }
+
+  /** Inject sidebar into the page */
+  mount() {
+    if (this.host) return;
+
+    this.host = document.createElement('div');
+    this.host.id = 'regent-sidebar-host';
+    this.shadow = this.host.attachShadow({ mode: 'open' });
+
+    // Inject styles
+    const style = document.createElement('style');
+    style.textContent = regentCSS;
+    this.shadow.appendChild(style);
+
+    // Build sidebar DOM
+    this.sidebar = document.createElement('div');
+    this.sidebar.id = 'regent-sidebar';
+    if (isDarkMode()) this.sidebar.classList.add('dark-mode');
+
+    this.sidebar.innerHTML = `
+      <div class="regent-header">
+        <div class="regent-header-content">
+          <span class="regent-title">Regent</span>
+          <span class="regent-badge">0 sessions</span>
+        </div>
+        <button class="regent-collapse-btn" title="Collapse sidebar">◀</button>
+        <div class="regent-expand-indicator">▶</div>
+      </div>
+      <div class="regent-meta" style="display:none"></div>
+      <div class="regent-sessions">
+        <div class="regent-empty">
+          <div class="regent-empty-icon">◎</div>
+          <div class="regent-empty-text">Watching for coding agent sessions...</div>
+        </div>
+      </div>
+    `;
+
+    this.shadow.appendChild(this.sidebar);
+
+    // Cache references
+    this.sessionsContainer = this.sidebar.querySelector('.regent-sessions');
+    this.metaEl = this.sidebar.querySelector('.regent-meta');
+
+    // Collapse/expand
+    const collapseBtn = this.sidebar.querySelector('.regent-collapse-btn');
+    collapseBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      this.toggleCollapse();
+    });
+
+    this.sidebar.addEventListener('click', () => {
+      if (this._collapsed) this.toggleCollapse();
+    });
+
+    // Theme detection
+    this._watchTheme();
+
+    document.body.appendChild(this.host);
+  }
+
+  /** Toggle sidebar collapse */
+  toggleCollapse() {
+    this._collapsed = !this._collapsed;
+    this.sidebar.classList.toggle('collapsed', this._collapsed);
+  }
+
+  /** Add or update a session section */
+  updateSession(sessionId, { name, events, stats }) {
+    // Remove empty state
+    const empty = this.sessionsContainer.querySelector('.regent-empty');
+    if (empty) empty.remove();
+
+    let section = this._sessionElements.get(sessionId);
+
+    if (!section) {
+      section = document.createElement('div');
+      section.className = 'regent-session';
+      section.dataset.sessionId = sessionId;
+      section.innerHTML = `
+        <div class="regent-session-header">
+          <span class="session-name"></span>
+          <span class="session-status active">Active</span>
+        </div>
+        <div class="session-stats"></div>
+        <div class="regent-events"></div>
+      `;
+      this.sessionsContainer.appendChild(section);
+      this._sessionElements.set(sessionId, section);
+    }
+
+    // Update header
+    section.querySelector('.session-name').textContent = name || sessionId;
+
+    // Update stats
+    if (stats) {
+      section.querySelector('.session-stats').textContent =
+        `${stats.processedMessages} messages processed · ${stats.eventCount} events`;
+    }
+
+    // Update events
+    const eventsContainer = section.querySelector('.regent-events');
+    this._renderEvents(eventsContainer, events);
+
+    // Update badge
+    this._updateBadge();
+  }
+
+  /** Render event list for a session */
+  _renderEvents(container, events) {
+    // Detect new events (beyond what's already rendered)
+    const existingCount = container.children.length;
+
+    // Clear and rebuild (events array is append-only, so this is fine)
+    container.innerHTML = '';
+
+    for (let i = 0; i < events.length; i++) {
+      const evt = events[i];
+      const el = document.createElement('div');
+      el.className = `regent-event${i >= existingCount ? ' entering' : ''}`;
+      el.dataset.importance = evt.importance;
+      el.dataset.eventId = evt.id;
+
+      const time = new Date(evt.timestamp).toLocaleTimeString([], {
+        hour: '2-digit', minute: '2-digit',
+      });
+
+      el.innerHTML = `
+        <div></div>
+        <div class="event-content">
+          <div class="event-header">
+            <span class="event-title">${this._escapeHtml(evt.title)}</span>
+            <span class="event-time">${time}</span>
+          </div>
+          <div class="event-summary">${this._escapeHtml(evt.summary)}</div>
+        </div>
+      `;
+
+      // Click-to-scroll
+      el.addEventListener('click', () => this._scrollToEvent(evt));
+
+      container.appendChild(el);
+    }
+  }
+
+  /** Scroll to the source message and highlight it */
+  _scrollToEvent(evt) {
+    const el = evt.sourceElement;
+    if (!el?.isConnected) return;
+
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Add highlight pulse
+    el.classList.add('regent-highlight-pulse');
+    setTimeout(() => el.classList.remove('regent-highlight-pulse'), HIGHLIGHT_DURATION);
+
+    // Inject the highlight CSS into the page (not shadow DOM) if not already
+    if (!document.getElementById('regent-highlight-styles')) {
+      const s = document.createElement('style');
+      s.id = 'regent-highlight-styles';
+      s.textContent = `
+        .regent-highlight-pulse {
+          position: relative;
+          animation: regent-page-pulse 1.5s ease-out;
+        }
+        .regent-highlight-pulse::after {
+          content: '';
+          position: absolute;
+          inset: -2px;
+          border: 2px solid #007aff;
+          border-radius: 8px;
+          pointer-events: none;
+          animation: regent-page-border 1.5s ease-out forwards;
+        }
+        @keyframes regent-page-pulse {
+          0% { background-color: rgba(0, 122, 255, 0.08); }
+          100% { background-color: transparent; }
+        }
+        @keyframes regent-page-border {
+          0% { opacity: 0.8; }
+          100% { opacity: 0; }
+        }
+      `;
+      document.head.appendChild(s);
+    }
+  }
+
+  /** Remove a session from the sidebar */
+  removeSession(sessionId) {
+    const section = this._sessionElements.get(sessionId);
+    if (section) {
+      section.remove();
+      this._sessionElements.delete(sessionId);
+    }
+
+    // Show empty state if no sessions
+    if (this._sessionElements.size === 0) {
+      this.sessionsContainer.innerHTML = `
+        <div class="regent-empty">
+          <div class="regent-empty-icon">◎</div>
+          <div class="regent-empty-text">No active sessions</div>
+        </div>
+      `;
+    }
+
+    this._updateBadge();
+  }
+
+  /** Show calibration UI */
+  showCalibration(onCalibrate) {
+    const empty = this.sessionsContainer.querySelector('.regent-empty');
+    if (empty) empty.remove();
+
+    const cal = document.createElement('div');
+    cal.className = 'regent-calibration';
+    cal.innerHTML = `
+      <p style="color: var(--regent-text-secondary); font-size: 13px; margin: 0 0 16px;">
+        Regent couldn't auto-detect sessions on this page.
+      </p>
+      <button class="regent-calibration-btn">
+        ⊕ Click a chat message to calibrate
+      </button>
+    `;
+
+    cal.querySelector('button').addEventListener('click', async () => {
+      cal.innerHTML = '<p style="color: var(--regent-text-secondary); font-size: 13px; padding: 8px;">Click any chat message on the page...</p>';
+      await onCalibrate();
+      cal.remove();
+    });
+
+    this.sessionsContainer.appendChild(cal);
+  }
+
+  /** Update meta-summary */
+  updateMeta(text) {
+    if (!text) {
+      this.metaEl.style.display = 'none';
+      return;
+    }
+    this.metaEl.textContent = text;
+    this.metaEl.style.display = 'block';
+  }
+
+  /** Update session count badge */
+  _updateBadge() {
+    const badge = this.sidebar.querySelector('.regent-badge');
+    const count = this._sessionElements.size;
+    badge.textContent = `${count} session${count !== 1 ? 's' : ''}`;
+  }
+
+  /** Watch for theme changes */
+  _watchTheme() {
+    const update = () => {
+      this.sidebar.classList.toggle('dark-mode', isDarkMode());
+    };
+
+    // System preference
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', update);
+
+    // DOM mutations on html/body (for site-level theme switches)
+    this._themeObserver = new MutationObserver(update);
+    this._themeObserver.observe(document.documentElement, {
+      attributes: true, attributeFilter: ['class', 'data-theme', 'data-color-mode'],
+    });
+  }
+
+  /** Escape HTML */
+  _escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  /** Destroy sidebar */
+  destroy() {
+    this._themeObserver?.disconnect();
+    this.host?.remove();
+    this.host = null;
+    this._sessionElements.clear();
+  }
+}

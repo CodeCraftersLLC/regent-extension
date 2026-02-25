@@ -1,0 +1,370 @@
+/* Regent Sidebar — Right panel for coding agent oversight */
+
+:host {
+  all: initial !important;
+  display: block !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  width: auto !important;
+  height: 100vh !important;
+  z-index: 2147483646 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+  -webkit-font-smoothing: antialiased !important;
+}
+
+/* ─── Sidebar container ─── */
+#regent-sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 320px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              width 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  pointer-events: auto;
+  box-sizing: border-box;
+
+  /* Light mode defaults */
+  --regent-bg: rgba(255, 255, 255, 0.92);
+  --regent-bg-solid: #ffffff;
+  --regent-text: #1d1d1f;
+  --regent-text-secondary: rgba(60, 60, 67, 0.6);
+  --regent-border: rgba(60, 60, 67, 0.12);
+  --regent-accent: #007aff;
+  --regent-accent-bg: rgba(0, 122, 255, 0.08);
+  --regent-high: #ff3b30;
+  --regent-medium: #ff9500;
+  --regent-low: rgba(60, 60, 67, 0.3);
+  --regent-event-bg: rgba(0, 0, 0, 0.02);
+  --regent-event-hover: rgba(0, 0, 0, 0.04);
+  --regent-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), -4px 0 24px rgba(0, 0, 0, 0.08);
+  --regent-header-bg: rgba(255, 255, 255, 0.85);
+
+  background: var(--regent-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  color: var(--regent-text);
+  box-shadow: var(--regent-shadow);
+}
+
+/* Dark mode */
+#regent-sidebar.dark-mode {
+  --regent-bg: rgba(28, 28, 30, 0.92);
+  --regent-bg-solid: #1c1c1e;
+  --regent-text: rgba(255, 255, 255, 0.9);
+  --regent-text-secondary: rgba(235, 235, 245, 0.4);
+  --regent-border: rgba(255, 255, 255, 0.08);
+  --regent-accent: #0a84ff;
+  --regent-accent-bg: rgba(10, 132, 255, 0.12);
+  --regent-high: #ff453a;
+  --regent-medium: #ff9f0a;
+  --regent-low: rgba(235, 235, 245, 0.2);
+  --regent-event-bg: rgba(255, 255, 255, 0.03);
+  --regent-event-hover: rgba(255, 255, 255, 0.06);
+  --regent-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), -4px 0 24px rgba(0, 0, 0, 0.3);
+  --regent-header-bg: rgba(28, 28, 30, 0.85);
+}
+
+/* ─── Collapsed state ─── */
+#regent-sidebar.collapsed {
+  width: 40px;
+  cursor: pointer;
+}
+#regent-sidebar.collapsed .regent-header-content,
+#regent-sidebar.collapsed .regent-sessions,
+#regent-sidebar.collapsed .regent-meta {
+  opacity: 0;
+  pointer-events: none;
+}
+#regent-sidebar.collapsed .regent-expand-indicator {
+  opacity: 1;
+}
+
+/* ─── Header ─── */
+.regent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--regent-border);
+  background: var(--regent-header-bg);
+  backdrop-filter: blur(20px);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.regent-header-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: opacity 0.2s;
+}
+
+.regent-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.regent-badge {
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--regent-accent-bg);
+  color: var(--regent-accent);
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+.regent-collapse-btn {
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: var(--regent-text-secondary);
+  font-size: 14px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+}
+.regent-collapse-btn:hover {
+  background: var(--regent-event-hover);
+  color: var(--regent-text);
+}
+
+.regent-expand-indicator {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  font-size: 16px;
+  color: var(--regent-text-secondary);
+}
+
+/* ─── Meta summary ─── */
+.regent-meta {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--regent-border);
+  font-size: 12px;
+  color: var(--regent-text-secondary);
+  line-height: 1.5;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+/* ─── Sessions list ─── */
+.regent-sessions {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: opacity 0.2s;
+  scrollbar-width: thin;
+  scrollbar-color: var(--regent-border) transparent;
+}
+.regent-sessions::-webkit-scrollbar { width: 4px; }
+.regent-sessions::-webkit-scrollbar-thumb {
+  background: var(--regent-border);
+  border-radius: 4px;
+}
+
+/* ─── Session section ─── */
+.regent-session {
+  border-bottom: 1px solid var(--regent-border);
+}
+
+.regent-session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  position: sticky;
+  top: 0;
+  background: var(--regent-bg-solid);
+  z-index: 1;
+}
+
+.session-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--regent-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.session-status {
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--regent-text-secondary);
+}
+.session-status.active { color: #34c759; }
+.session-status.active::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.session-stats {
+  font-size: 11px;
+  color: var(--regent-text-secondary);
+  padding: 0 16px 6px;
+}
+
+/* ─── Events ─── */
+.regent-events {
+  padding: 4px 0;
+}
+
+.regent-event {
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 0;
+  transition: background 0.15s;
+  display: grid;
+  grid-template-columns: 6px 1fr;
+  gap: 0 10px;
+  align-items: start;
+  position: relative;
+}
+.regent-event:hover {
+  background: var(--regent-event-hover);
+}
+.regent-event:active {
+  background: var(--regent-accent-bg);
+}
+
+/* Importance dot */
+.regent-event::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+.regent-event[data-importance="high"]::before { background: var(--regent-high); }
+.regent-event[data-importance="medium"]::before { background: var(--regent-medium); }
+.regent-event[data-importance="low"]::before { background: var(--regent-low); }
+
+.event-content {
+  min-width: 0;
+}
+
+.event-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.event-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--regent-text);
+  line-height: 1.4;
+}
+
+.event-time {
+  font-size: 10px;
+  color: var(--regent-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.event-summary {
+  font-size: 11px;
+  color: var(--regent-text-secondary);
+  line-height: 1.45;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ─── Event entry animation ─── */
+.regent-event.entering {
+  animation: regent-event-enter 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+@keyframes regent-event-enter {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* ─── Scroll-to highlight on target message ─── */
+.regent-highlight-pulse {
+  animation: regent-pulse 1.5s ease-out;
+  position: relative;
+}
+.regent-highlight-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border: 2px solid var(--regent-accent, #007aff);
+  border-radius: 8px;
+  pointer-events: none;
+  animation: regent-pulse-border 1.5s ease-out forwards;
+}
+@keyframes regent-pulse-border {
+  0% { opacity: 0.8; }
+  100% { opacity: 0; }
+}
+
+/* ─── Empty state ─── */
+.regent-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px;
+  text-align: center;
+  color: var(--regent-text-secondary);
+  gap: 8px;
+}
+.regent-empty-icon {
+  font-size: 32px;
+  opacity: 0.4;
+}
+.regent-empty-text {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ─── Calibration prompt ─── */
+.regent-calibration {
+  padding: 24px 16px;
+  text-align: center;
+}
+.regent-calibration-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--regent-accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.regent-calibration-btn:hover { opacity: 0.85; }
+
+/* ─── Scrollbar smooth ─── */
+.regent-sessions {
+  scroll-behavior: smooth;
+}
