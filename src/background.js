@@ -298,13 +298,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "abortRequest") {
-    const abortKey = request.requestId
-      ? `${sender.tab.id}_${request.requestId}`
-      : sender.tab.id;
-    const controller = requestControllers.get(abortKey);
-    if (controller) {
-      controller.abort();
-      requestControllers.delete(abortKey);
+    const tabId = sender?.tab?.id;
+    const abortKey = request.requestId && tabId != null
+      ? `${tabId}_${request.requestId}`
+      : tabId;
+    if (abortKey != null) {
+      const controller = requestControllers.get(abortKey);
+      if (controller) {
+        controller.abort();
+        requestControllers.delete(abortKey);
+      }
     }
     sendResponse({ success: true });
     return true;

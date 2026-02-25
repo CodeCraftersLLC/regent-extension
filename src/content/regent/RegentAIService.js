@@ -92,10 +92,20 @@ export class RegentAIService {
   /** Send a non-streaming request via background proxy's sendResponse callback */
   _proxyRequest(url, apiKey, model, messages, maxTokens = 2048) {
     const requestId = `regent-${++_requestCounter}`;
+    let settled = false;
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Regent request timeout (30s)'));
+      const settle = (fn, val) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(val);
+      };
+
+      const timer = setTimeout(() => {
+        // Cancel the background fetch on timeout
+        chrome.runtime.sendMessage({ action: 'abortRequest', requestId });
+        settle(reject, new Error('Regent request timeout (30s)'));
       }, 30_000);
 
       chrome.runtime.sendMessage({
@@ -115,23 +125,19 @@ export class RegentAIService {
           max_tokens: maxTokens,
         }),
       }, response => {
-        clearTimeout(timeout);
-
         if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
+          settle(reject, new Error(chrome.runtime.lastError.message));
           return;
         }
 
-        // Non-streaming: background returns { status, ok, data, text } via sendResponse
         if (!response?.ok) {
           const errMsg = response?.data?.error?.message || response?.text || response?.error || 'Request failed';
-          reject(new Error(`API error (${response?.status}): ${errMsg}`));
+          settle(reject, new Error(`API error (${response?.status}): ${errMsg}`));
           return;
         }
 
-        // Extract content from response
         const content = response.data?.choices?.[0]?.message?.content || '';
-        resolve(content);
+        settle(resolve, content);
       });
     });
   }
@@ -158,22 +164,23 @@ export class RegentAIService {
       .map((text, i) => `[Message ${i}]\n${text.slice(0, 2000)}`)
       .join('\n\n---\n\n');
 
+    const content = await this._proxyRequest(apiUrl, apiKey, model, [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: formattedMessages },
+    ]);
+
+    if (!content) return [];
+
     try {
-      const content = await this._proxyRequest(apiUrl, apiKey, model, [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: formattedMessages },
-      ]);
-
-      if (!content) return [];
-
       // Parse JSON from response (handle possible markdown fencing)
       const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
       const events = JSON.parse(cleaned);
       return Array.isArray(events) ? events : [];
-    } catch (err) {
-      console.warn('[Regent] Summarization error:', err.message);
+    } catch (parseErr) {
+      console.warn('[Regent] Failed to parse summarization response:', parseErr.message);
       return [];
     }
+    // Transport/API errors from _proxyRequest propagate to caller
   }
 
   /** Generate a meta-summary across multiple sessions */

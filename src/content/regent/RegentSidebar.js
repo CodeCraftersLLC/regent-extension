@@ -150,7 +150,6 @@ export class RegentSidebar {
       });
 
       el.innerHTML = `
-        <div></div>
         <div class="event-content">
           <div class="event-header">
             <span class="event-title">${this._escapeHtml(evt.title)}</span>
