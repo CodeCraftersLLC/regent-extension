@@ -110,9 +110,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const controller = new AbortController();
     const signal = controller.signal;
 
-    // 存储控制器
-    if (sender?.tab?.id) {
-      requestControllers.set(sender.tab.id, controller);
+    // 存储控制器 — use requestId if provided (regent), else tab-only key (main chat)
+    const controllerKey = request.requestId
+      ? `${sender?.tab?.id}_${request.requestId}`
+      : sender?.tab?.id;
+    if (controllerKey != null) {
+      requestControllers.set(controllerKey, controller);
     }
 
     // 修复: 确保模型参数被正确添加到请求中
@@ -282,8 +285,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       })
       .finally(() => {
         // 清理控制器
-        if (sender?.tab?.id) {
-          requestControllers.delete(sender.tab.id);
+        if (controllerKey != null) {
+          requestControllers.delete(controllerKey);
         }
       });
     };
@@ -295,10 +298,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "abortRequest") {
-    const controller = requestControllers.get(sender.tab.id);
+    const abortKey = request.requestId
+      ? `${sender.tab.id}_${request.requestId}`
+      : sender.tab.id;
+    const controller = requestControllers.get(abortKey);
     if (controller) {
       controller.abort();
-      requestControllers.delete(sender.tab.id);
+      requestControllers.delete(abortKey);
     }
     sendResponse({ success: true });
     return true;

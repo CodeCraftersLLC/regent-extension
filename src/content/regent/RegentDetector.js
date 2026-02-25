@@ -12,12 +12,10 @@ const DEBOUNCE_MS = 200;
 
 // Default selector patterns to try (Happy Engineering + common patterns)
 const SELECTOR_CANDIDATES = [
-  // Happy Engineering likely patterns
   { session: '[data-session-id]', message: '[data-message-id]' },
   { session: '.session-container', message: '.message' },
   { session: '[class*="session"]', message: '[class*="message"]' },
   { session: '[class*="chat"]', message: '[class*="message"]' },
-  // Generic patterns
   { session: '[role="log"]', message: '[role="article"]' },
   { session: '.conversation', message: '.turn' },
 ];
@@ -32,6 +30,9 @@ export class RegentDetector {
     this.onNewMessages = null;
     this.knownSessions = new Set();
     this._debounceTimer = null;
+    this._origPushState = null;
+    this._origReplaceState = null;
+    this._popstateHandler = null;
   }
 
   /** Load stored selectors from chrome.storage */
@@ -52,26 +53,35 @@ export class RegentDetector {
     });
   }
 
+  /** Safely run querySelectorAll — returns empty array on invalid selector */
+  _safeQueryAll(root, selector) {
+    if (!selector) return [];
+    try {
+      return [...root.querySelectorAll(selector)];
+    } catch {
+      return [];
+    }
+  }
+
   /** Try to detect sessions using stored or candidate selectors */
   detectSessions() {
     // Try stored selectors first
-    if (this.selectors) {
-      const sessions = document.querySelectorAll(this.selectors.session);
-      if (sessions.length > 0) return [...sessions];
+    if (this.selectors?.session) {
+      const sessions = this._safeQueryAll(document, this.selectors.session);
+      if (sessions.length > 0) return sessions;
     }
 
     // Try candidate patterns
     for (const candidate of SELECTOR_CANDIDATES) {
-      const sessions = document.querySelectorAll(candidate.session);
+      const sessions = this._safeQueryAll(document, candidate.session);
       if (sessions.length > 0) {
-        // Validate: sessions should contain message-like children
-        const hasMessages = [...sessions].some(
-          s => s.querySelectorAll(candidate.message).length > 0
+        const hasMessages = sessions.some(
+          s => this._safeQueryAll(s, candidate.message).length > 0
         );
         if (hasMessages) {
           this.selectors = candidate;
           this.saveSelectors(candidate);
-          return [...sessions];
+          return sessions;
         }
       }
     }
@@ -80,18 +90,25 @@ export class RegentDetector {
     return this._heuristicDetect();
   }
 
-  /** Heuristic session detection */
+  /** Heuristic session detection — scans only likely scrollable containers */
   _heuristicDetect() {
     const candidates = [];
-    const scrollables = document.querySelectorAll('*');
 
-    for (const el of scrollables) {
+    // Target only elements likely to be scrollable containers
+    // Avoids querySelectorAll('*') + getComputedStyle on every element
+    const potentials = document.querySelectorAll(
+      '[style*="overflow"], [class*="scroll"], [class*="chat"], [class*="session"], ' +
+      '[class*="message"], [class*="conversation"], [role="log"], [role="feed"], main, article'
+    );
+
+    for (const el of potentials) {
+      const children = el.children;
+      if (children.length < 3) continue;
+
+      // Only check computedStyle for elements that passed child-count filter
       const style = getComputedStyle(el);
       const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
       if (!isScrollable) continue;
-
-      const children = el.children;
-      if (children.length < 3) continue;
 
       // Score: text density + child uniformity
       let textLength = 0;
@@ -114,7 +131,6 @@ export class RegentDetector {
 
     if (candidates.length > 0) {
       const best = candidates[0];
-      // Build selectors from the detected structure
       const sessionSelector = this._buildSelector(best.el);
       const messageSelector = best.childTag
         ? `${sessionSelector} > ${best.childTag.toLowerCase()}`
@@ -142,7 +158,6 @@ export class RegentDetector {
         break;
       }
 
-      // Use meaningful classes (skip utility classes like 'p-4')
       const meaningful = [...current.classList].filter(
         c => c.length > 3 && !/^[a-z]-\d|^(p|m|w|h|flex|grid|text|bg)-/.test(c)
       );
@@ -150,7 +165,6 @@ export class RegentDetector {
         selector += `.${meaningful.map(c => CSS.escape(c)).join('.')}`;
       }
 
-      // Add nth-child if needed for uniqueness
       const parent = current.parentElement;
       if (parent) {
         const siblings = [...parent.children].filter(s => s.tagName === current.tagName);
@@ -169,30 +183,34 @@ export class RegentDetector {
 
   /** Extract session ID from element or URL */
   getSessionId(sessionEl) {
-    // Check data attributes
     for (const attr of sessionEl.attributes) {
       if (/session|id/i.test(attr.name) && attr.value) return attr.value;
     }
 
-    // Extract from URL
     const urlMatch = location.pathname.match(/\/session\/([^/]+)/);
     if (urlMatch) return urlMatch[1];
 
-    // Fallback: use element index
     const allSessions = this.detectSessions();
     const idx = allSessions.indexOf(sessionEl);
     return `session-${idx >= 0 ? idx : Date.now()}`;
   }
 
-  /** Get messages within a session */
+  /** Get messages within a session — use full selector scoped to sessionEl */
   getMessages(sessionEl) {
     if (!this.selectors?.message) return [...sessionEl.children];
-    // Use the message part of the selector (after the session selector)
-    const msgSelector = this.selectors.message.includes(' ')
-      ? this.selectors.message.split(' ').pop()
-      : this.selectors.message;
-    const messages = sessionEl.querySelectorAll(msgSelector);
-    return messages.length > 0 ? [...messages] : [...sessionEl.children];
+
+    // Query the full message selector scoped within the session element
+    const messages = this._safeQueryAll(sessionEl, this.selectors.message);
+    if (messages.length > 0) return messages;
+
+    // Fallback: try the last segment of a compound '>' selector within sessionEl
+    if (this.selectors.message.includes('>')) {
+      const lastPart = this.selectors.message.split('>').pop().trim();
+      const scoped = this._safeQueryAll(sessionEl, lastPart);
+      if (scoped.length > 0) return scoped;
+    }
+
+    return [...sessionEl.children];
   }
 
   /** Start observing for new sessions and messages */
@@ -201,21 +219,17 @@ export class RegentDetector {
     this.onSessionLost = onSessionLost;
     this.onNewMessages = onNewMessages;
 
-    // Watch document body for new session containers
     this.bodyObserver = new MutationObserver(() => this._debouncedScan());
     this.bodyObserver.observe(document.body, { childList: true, subtree: true });
 
-    // Also watch for SPA navigation
     this._watchNavigation();
   }
 
-  /** Debounced DOM scan */
   _debouncedScan() {
     clearTimeout(this._debounceTimer);
     this._debounceTimer = setTimeout(() => this._scanForChanges(), DEBOUNCE_MS);
   }
 
-  /** Scan for session changes */
   _scanForChanges() {
     const currentSessions = this.detectSessions();
     const currentIds = new Set();
@@ -231,7 +245,6 @@ export class RegentDetector {
       }
     }
 
-    // Check for removed sessions
     for (const id of this.knownSessions) {
       if (!currentIds.has(id)) {
         this.knownSessions.delete(id);
@@ -241,7 +254,6 @@ export class RegentDetector {
     }
   }
 
-  /** Watch a specific session for new messages */
   _watchSession(id, sessionEl) {
     let lastMessageCount = this.getMessages(sessionEl).length;
 
@@ -258,21 +270,19 @@ export class RegentDetector {
     this.sessionObservers.set(id, observer);
   }
 
-  /** Stop watching a session */
   _unwatchSession(id) {
     const observer = this.sessionObservers.get(id);
     observer?.disconnect();
     this.sessionObservers.delete(id);
   }
 
-  /** Watch for SPA route changes */
+  /** Watch for SPA route changes — stores originals for cleanup */
   _watchNavigation() {
     let lastPath = location.pathname;
 
     const check = () => {
       if (location.pathname !== lastPath) {
         lastPath = location.pathname;
-        // Reset and rescan on navigation
         this.knownSessions.clear();
         this.sessionObservers.forEach(o => o.disconnect());
         this.sessionObservers.clear();
@@ -280,11 +290,17 @@ export class RegentDetector {
       }
     };
 
-    // Intercept pushState/replaceState
-    const orig = { pushState: history.pushState, replaceState: history.replaceState };
-    history.pushState = function(...args) { orig.pushState.apply(this, args); check(); };
-    history.replaceState = function(...args) { orig.replaceState.apply(this, args); check(); };
-    window.addEventListener('popstate', check);
+    // Store originals so destroy() can restore them
+    this._origPushState = history.pushState;
+    this._origReplaceState = history.replaceState;
+
+    const origPush = this._origPushState;
+    const origReplace = this._origReplaceState;
+    history.pushState = function(...args) { origPush.apply(this, args); check(); };
+    history.replaceState = function(...args) { origReplace.apply(this, args); check(); };
+
+    this._popstateHandler = check;
+    window.addEventListener('popstate', this._popstateHandler);
   }
 
   /** Enter calibration mode — user clicks a message to teach the detector */
@@ -324,13 +340,11 @@ export class RegentDetector {
         const target = document.elementFromPoint(e.clientX, e.clientY);
         if (!target || target === overlay || overlay.contains(target)) return;
 
-        // Clean up
         if (hoverEl) hoverEl.style.outline = '';
         overlay.remove();
         document.removeEventListener('mousemove', onMove, true);
         document.removeEventListener('click', onClick, true);
 
-        // Build selectors from clicked element
         const messageSelector = this._buildSelector(target);
 
         // Walk up to find the scrollable session container
@@ -341,9 +355,18 @@ export class RegentDetector {
           session = session.parentElement;
         }
 
-        const sessionSelector = session ? this._buildSelector(session) : '';
-        const selectors = { session: sessionSelector, message: messageSelector };
+        // Guard: ensure valid session selector
+        const sessionSelector = (session && session !== document.body)
+          ? this._buildSelector(session)
+          : null;
 
+        if (!sessionSelector) {
+          console.warn('[Regent] Calibration: could not find scrollable session container');
+          resolve(null);
+          return;
+        }
+
+        const selectors = { session: sessionSelector, message: messageSelector };
         this.saveSelectors(selectors);
         resolve(selectors);
       };
@@ -354,12 +377,21 @@ export class RegentDetector {
     });
   }
 
-  /** Stop all observation */
+  /** Stop all observation and restore monkey-patches */
   destroy() {
     this.bodyObserver?.disconnect();
     this.sessionObservers.forEach(o => o.disconnect());
     this.sessionObservers.clear();
     this.knownSessions.clear();
     clearTimeout(this._debounceTimer);
+
+    // Restore history API
+    if (this._origPushState) history.pushState = this._origPushState;
+    if (this._origReplaceState) history.replaceState = this._origReplaceState;
+    if (this._popstateHandler) window.removeEventListener('popstate', this._popstateHandler);
+
+    this._origPushState = null;
+    this._origReplaceState = null;
+    this._popstateHandler = null;
   }
 }

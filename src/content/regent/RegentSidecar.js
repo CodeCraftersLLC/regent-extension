@@ -94,8 +94,8 @@ export class RegentSidecar {
       this.onEventsUpdate?.(this.sessionId, this.events);
     } catch (err) {
       console.warn(`[Regent:Sidecar:${this.sessionId}] Summarization failed:`, err.message);
-      // Re-queue failed batch
-      this._buffer.unshift(...batch);
+      // Drop failed batch to avoid infinite retry loop — messages are lost but system stays stable
+      this._processedCount += batch.length;
     } finally {
       this._summarizing = false;
 

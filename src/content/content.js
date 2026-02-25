@@ -8,9 +8,12 @@ import { popupStateManager } from './utils/popupStateManager';
 // Debug log
 console.log(`DeepSeek AI: Content script injected on ${window.location.href}`);
 
-// Regent: Coding agent orchestrator (only on Happy Engineering)
-if (location.hostname === 'app.happy.engineering') {
-  import('./regent/RegentOrchestrator').then(m => m.init());
+// Regent: Coding agent orchestrator — configurable target hostnames
+const REGENT_HOSTNAMES = ['app.happy.engineering'];
+if (REGENT_HOSTNAMES.includes(location.hostname)) {
+  import('./regent/RegentOrchestrator')
+    .then(m => m.init())
+    .catch(err => console.warn('[Regent] Failed to load:', err.message));
 }
 
 // State

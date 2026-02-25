@@ -2,7 +2,7 @@
  * RegentAIService — Lightweight AI summarization for regent sidecars
  *
  * Uses the same provider/model/API key configured in extension settings.
- * Non-streaming calls via the background proxy for key event extraction.
+ * Non-streaming calls via the background proxy's sendResponse callback.
  */
 
 const SYSTEM_PROMPT = `You are a coding session analyst. Given chat messages from a Claude Code coding session, extract KEY EVENTS — moments that matter for a high-level overview.
@@ -19,19 +19,29 @@ Focus on: decisions made, errors encountered, files changed, features implemente
 Skip: routine acknowledgments, thinking/reasoning traces, repetitive back-and-forth.
 Return empty array [] if no significant events found.`;
 
+let _requestCounter = 0;
+
 export class RegentAIService {
   constructor() {
     this._settings = null;
     this._settingsAge = 0;
   }
 
-  /** Fetch extension settings (cached for 60s) */
+  /** Fetch extension settings (cached for 60s) with error validation */
   async _getSettings() {
     if (this._settings && Date.now() - this._settingsAge < 60_000) return this._settings;
 
-    this._settings = await new Promise(resolve =>
-      chrome.runtime.sendMessage({ action: 'getSettings' }, resolve)
-    );
+    this._settings = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ action: 'getSettings' }, response => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(response);
+      });
+    });
+
+    if (!this._settings) throw new Error('Failed to retrieve extension settings');
     this._settingsAge = Date.now();
     return this._settings;
   }
@@ -73,7 +83,57 @@ export class RegentAIService {
       apiUrl = settings[customUrlKey] || providerUrlMap[provider] || providerUrlMap.deepseek;
     }
 
-    return { apiKey, apiUrl, model: settings.model || 'deepseek-chat' };
+    // Validate model — use provider default only for deepseek
+    const model = settings.model || (provider === 'deepseek' ? 'deepseek-chat' : '');
+
+    return { apiKey, apiUrl, model, provider };
+  }
+
+  /** Send a non-streaming request via background proxy's sendResponse callback */
+  _proxyRequest(url, apiKey, model, messages, maxTokens = 2048) {
+    const requestId = `regent-${++_requestCounter}`;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Regent request timeout (30s)'));
+      }, 30_000);
+
+      chrome.runtime.sendMessage({
+        action: 'proxyRequest',
+        requestId,
+        url,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: false,
+          temperature: 0.3,
+          max_tokens: maxTokens,
+        }),
+      }, response => {
+        clearTimeout(timeout);
+
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        // Non-streaming: background returns { status, ok, data, text } via sendResponse
+        if (!response?.ok) {
+          const errMsg = response?.data?.error?.message || response?.text || response?.error || 'Request failed';
+          reject(new Error(`API error (${response?.status}): ${errMsg}`));
+          return;
+        }
+
+        // Extract content from response
+        const content = response.data?.choices?.[0]?.message?.content || '';
+        resolve(content);
+      });
+    });
   }
 
   /** Send a non-streaming summarization request */
@@ -81,10 +141,15 @@ export class RegentAIService {
     if (!messageTexts?.length) return [];
 
     const settings = await this._getSettings();
-    const { apiKey, apiUrl, model } = this._resolveProvider(settings);
+    const { apiKey, apiUrl, model, provider } = this._resolveProvider(settings);
 
     if (!apiKey) {
       console.warn('[Regent] No API key configured — skipping summarization');
+      return [];
+    }
+
+    if (!model) {
+      console.warn(`[Regent] No model configured for provider "${provider}" — skipping summarization`);
       return [];
     }
 
@@ -94,68 +159,15 @@ export class RegentAIService {
       .join('\n\n---\n\n');
 
     try {
-      const response = await new Promise((resolve, reject) => {
-        // Listen for non-streaming response
-        const handler = msg => {
-          if (msg.type !== 'streamResponse') return;
-          chrome.runtime.onMessage.removeListener(handler);
+      const content = await this._proxyRequest(apiUrl, apiKey, model, [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: formattedMessages },
+      ]);
 
-          if (!msg.response.ok) {
-            reject(new Error(msg.response.error || 'Summarization failed'));
-            return;
-          }
-
-          // For non-streaming, the full response comes in one chunk
-          if (msg.response.data) {
-            const dataLine = msg.response.data.replace(/^data: /, '').replace(/\n\n$/, '');
-            if (dataLine === '[DONE]') {
-              resolve(null);
-              return;
-            }
-            try {
-              const parsed = JSON.parse(dataLine);
-              const content = parsed.choices?.[0]?.message?.content
-                || parsed.choices?.[0]?.delta?.content || '';
-              resolve(content);
-            } catch {
-              resolve(dataLine);
-            }
-          }
-        };
-
-        chrome.runtime.onMessage.addListener(handler);
-
-        // Set a timeout
-        setTimeout(() => {
-          chrome.runtime.onMessage.removeListener(handler);
-          reject(new Error('Summarization timeout'));
-        }, 30_000);
-
-        chrome.runtime.sendMessage({
-          action: 'proxyRequest',
-          url: apiUrl,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'user', content: formattedMessages },
-            ],
-            stream: false,
-            temperature: 0.3,
-            max_tokens: 2048,
-          }),
-        });
-      });
-
-      if (!response) return [];
+      if (!content) return [];
 
       // Parse JSON from response (handle possible markdown fencing)
-      const cleaned = response.replace(/```json\n?|\n?```/g, '').trim();
+      const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
       const events = JSON.parse(cleaned);
       return Array.isArray(events) ? events : [];
     } catch (err) {
@@ -169,46 +181,24 @@ export class RegentAIService {
     if (!sessionSummaries?.length) return '';
 
     const settings = await this._getSettings();
-    const { apiKey, apiUrl, model } = this._resolveProvider(settings);
-    if (!apiKey) return '';
+    const { apiKey, apiUrl, model, provider } = this._resolveProvider(settings);
 
-    const content = sessionSummaries
+    if (!apiKey || !model) {
+      console.warn(`[Regent] Cannot meta-summarize: missing ${!apiKey ? 'API key' : 'model'} for "${provider}"`);
+      return '';
+    }
+
+    const userContent = sessionSummaries
       .map(s => `## ${s.name}\n${s.events.map(e => `- [${e.importance}] ${e.title}: ${e.summary}`).join('\n')}`)
       .join('\n\n');
 
     try {
-      const response = await new Promise((resolve, reject) => {
-        const handler = msg => {
-          if (msg.type !== 'streamResponse') return;
-          chrome.runtime.onMessage.removeListener(handler);
-          if (!msg.response.ok) { reject(new Error('Meta-summary failed')); return; }
-          if (msg.response.data) {
-            const dataLine = msg.response.data.replace(/^data: /, '').replace(/\n\n$/, '');
-            if (dataLine === '[DONE]') { resolve(''); return; }
-            try {
-              const parsed = JSON.parse(dataLine);
-              resolve(parsed.choices?.[0]?.message?.content || '');
-            } catch { resolve(''); }
-          }
-        };
-        chrome.runtime.onMessage.addListener(handler);
-        setTimeout(() => { chrome.runtime.onMessage.removeListener(handler); resolve(''); }, 30_000);
-
-        chrome.runtime.sendMessage({
-          action: 'proxyRequest', url: apiUrl, method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: 'system', content: 'Provide a brief 2-3 sentence overview of what is happening across all these coding sessions. Focus on overall progress and any blocked/critical items.' },
-              { role: 'user', content },
-            ],
-            stream: false, temperature: 0.3, max_tokens: 512,
-          }),
-        });
-      });
-      return response;
-    } catch {
+      return await this._proxyRequest(apiUrl, apiKey, model, [
+        { role: 'system', content: 'Provide a brief 2-3 sentence overview of what is happening across all these coding sessions. Focus on overall progress and any blocked/critical items.' },
+        { role: 'user', content: userContent },
+      ], 512);
+    } catch (err) {
+      console.warn('[Regent] Meta-summary error:', err.message);
       return '';
     }
   }

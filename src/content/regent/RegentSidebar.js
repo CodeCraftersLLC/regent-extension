@@ -20,6 +20,8 @@ export class RegentSidebar {
     this._collapsed = false;
     this._sessionElements = new Map(); // sessionId → DOM section
     this._themeObserver = null;
+    this._mediaQuery = null;
+    this._themeUpdateFn = null;
   }
 
   /** Inject sidebar into the page */
@@ -270,17 +272,18 @@ export class RegentSidebar {
     badge.textContent = `${count} session${count !== 1 ? 's' : ''}`;
   }
 
-  /** Watch for theme changes */
+  /** Watch for theme changes — stores references for cleanup */
   _watchTheme() {
-    const update = () => {
+    this._themeUpdateFn = () => {
       this.sidebar.classList.toggle('dark-mode', isDarkMode());
     };
 
-    // System preference
-    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', update);
+    // System preference — store reference for removal
+    this._mediaQuery = matchMedia('(prefers-color-scheme: dark)');
+    this._mediaQuery.addEventListener('change', this._themeUpdateFn);
 
     // DOM mutations on html/body (for site-level theme switches)
-    this._themeObserver = new MutationObserver(update);
+    this._themeObserver = new MutationObserver(this._themeUpdateFn);
     this._themeObserver.observe(document.documentElement, {
       attributes: true, attributeFilter: ['class', 'data-theme', 'data-color-mode'],
     });
@@ -293,9 +296,14 @@ export class RegentSidebar {
     return div.innerHTML;
   }
 
-  /** Destroy sidebar */
+  /** Destroy sidebar — clean up all listeners */
   destroy() {
     this._themeObserver?.disconnect();
+    if (this._mediaQuery && this._themeUpdateFn) {
+      this._mediaQuery.removeEventListener('change', this._themeUpdateFn);
+    }
+    this._mediaQuery = null;
+    this._themeUpdateFn = null;
     this.host?.remove();
     this.host = null;
     this._sessionElements.clear();
