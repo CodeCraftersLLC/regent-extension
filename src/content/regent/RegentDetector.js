@@ -90,27 +90,45 @@ export class RegentDetector {
     return this._heuristicDetect();
   }
 
-  /** Heuristic session detection — scans only likely scrollable containers */
+  /** Heuristic session detection — optimized scan with full-DOM fallback */
   _heuristicDetect() {
+    // Fast pass: target elements likely to be scrollable via class/role/inline style
+    const fastSelector =
+      '[style*="overflow"], [class*="scroll"], [class*="chat"], [class*="session"], ' +
+      '[class*="message"], [class*="conversation"], [role="log"], [role="feed"], main, article';
+
+    let result = this._scoreScrollables(document.querySelectorAll(fastSelector));
+
+    // Fallback: if fast pass found nothing, scan all elements with ≥3 children
+    // (avoids getComputedStyle on leaf nodes which are the vast majority)
+    if (!result) {
+      const allWithChildren = document.querySelectorAll('*');
+      result = this._scoreScrollables(allWithChildren);
+    }
+
+    if (result) {
+      const sessionSelector = this._buildSelector(result.el);
+      const messageSelector = result.childTag
+        ? `${sessionSelector} > ${result.childTag.toLowerCase()}`
+        : `${sessionSelector} > *`;
+      this.selectors = { session: sessionSelector, message: messageSelector };
+      return [result.el];
+    }
+
+    return [];
+  }
+
+  /** Score a NodeList for scrollable containers with message-like children */
+  _scoreScrollables(elements) {
     const candidates = [];
 
-    // Target only elements likely to be scrollable containers
-    // Avoids querySelectorAll('*') + getComputedStyle on every element
-    const potentials = document.querySelectorAll(
-      '[style*="overflow"], [class*="scroll"], [class*="chat"], [class*="session"], ' +
-      '[class*="message"], [class*="conversation"], [role="log"], [role="feed"], main, article'
-    );
-
-    for (const el of potentials) {
+    for (const el of elements) {
       const children = el.children;
       if (children.length < 3) continue;
 
-      // Only check computedStyle for elements that passed child-count filter
       const style = getComputedStyle(el);
-      const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
-      if (!isScrollable) continue;
+      if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue;
 
-      // Score: text density + child uniformity
       let textLength = 0;
       let uniformTags = 0;
       const firstTag = children[0]?.tagName;
@@ -121,26 +139,11 @@ export class RegentDetector {
       }
 
       const score = (textLength / 100) + (uniformTags / children.length * 10) + children.length;
-
-      if (score > 15) {
-        candidates.push({ el, score, childTag: firstTag });
-      }
+      if (score > 15) candidates.push({ el, score, childTag: firstTag });
     }
 
     candidates.sort((a, b) => b.score - a.score);
-
-    if (candidates.length > 0) {
-      const best = candidates[0];
-      const sessionSelector = this._buildSelector(best.el);
-      const messageSelector = best.childTag
-        ? `${sessionSelector} > ${best.childTag.toLowerCase()}`
-        : `${sessionSelector} > *`;
-
-      this.selectors = { session: sessionSelector, message: messageSelector };
-      return [best.el];
-    }
-
-    return [];
+    return candidates[0] || null;
   }
 
   /** Build a CSS selector for an element */
@@ -199,14 +202,21 @@ export class RegentDetector {
   getMessages(sessionEl) {
     if (!this.selectors?.message) return [...sessionEl.children];
 
-    // Query the full message selector scoped within the session element
+    // Try the full message selector scoped within the session element
     const messages = this._safeQueryAll(sessionEl, this.selectors.message);
     if (messages.length > 0) return messages;
 
-    // Fallback: try the last segment of a compound '>' selector within sessionEl
-    if (this.selectors.message.includes('>')) {
-      const lastPart = this.selectors.message.split('>').pop().trim();
-      const scoped = this._safeQueryAll(sessionEl, lastPart);
+    // Fallback: extract the last segment of a compound selector and query within sessionEl
+    // Handles both "parent > child" and "ancestor descendant" patterns
+    const selector = this.selectors.message;
+    const lastSegment = selector.includes('>')
+      ? selector.split('>').pop().trim()
+      : selector.includes(' ')
+        ? selector.split(/\s+/).pop()
+        : null;
+
+    if (lastSegment) {
+      const scoped = this._safeQueryAll(sessionEl, lastSegment);
       if (scoped.length > 0) return scoped;
     }
 
