@@ -1,6 +1,11 @@
 // 在文件开头添加调试日志
 const requestControllers = new Map(); // 存储请求控制器
 
+const makeControllerKey = (tabId, requestId) =>
+  requestId
+    ? (tabId != null ? `${tabId}_${requestId}` : requestId)
+    : tabId;
+
 // 加载自定义Provider
 async function loadCustomProviders() {
   return new Promise((resolve) => {
@@ -111,9 +116,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const signal = controller.signal;
 
     // 存储控制器 — use requestId if provided (regent), else tab-only key (main chat)
-    const controllerKey = request.requestId
-      ? `${sender?.tab?.id}_${request.requestId}`
-      : sender?.tab?.id;
+    const controllerKey = makeControllerKey(sender?.tab?.id, request.requestId);
     if (controllerKey != null) {
       requestControllers.set(controllerKey, controller);
     }
@@ -298,10 +301,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "abortRequest") {
-    const tabId = sender?.tab?.id;
-    const abortKey = request.requestId && tabId != null
-      ? `${tabId}_${request.requestId}`
-      : tabId;
+    const abortKey = makeControllerKey(sender?.tab?.id, request.requestId);
     if (abortKey != null) {
       const controller = requestControllers.get(abortKey);
       if (controller) {
