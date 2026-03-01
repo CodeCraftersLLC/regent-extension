@@ -4,9 +4,16 @@ import { initMouseHandlers, hideQuickActions } from "./handlers/MouseHandler";
 import { popupManager } from "./components/PopupManager";
 import { selectionManager } from "./components/SelectionManager";
 import { popupStateManager } from './utils/popupStateManager';
+import { init as initRegent } from './regent/RegentOrchestrator';
 
 // Debug log
 console.log(`DeepSeek AI: Content script injected on ${window.location.href}`);
+
+// Regent: Coding agent orchestrator — configurable target hostnames
+const REGENT_HOSTNAMES = ['app.happy.engineering'];
+if (REGENT_HOSTNAMES.includes(location.hostname)) {
+  initRegent().catch(err => console.warn('[Regent] Failed to init:', err));
+}
 
 // State
 let isSelectionEnabled = true;

@@ -1,6 +1,11 @@
 // 在文件开头添加调试日志
 const requestControllers = new Map(); // 存储请求控制器
 
+const makeControllerKey = (tabId, requestId) =>
+  requestId != null
+    ? (tabId != null ? `${tabId}_${requestId}` : requestId)
+    : tabId;
+
 // 加载自定义Provider
 async function loadCustomProviders() {
   return new Promise((resolve) => {
@@ -110,9 +115,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const controller = new AbortController();
     const signal = controller.signal;
 
-    // 存储控制器
-    if (sender?.tab?.id) {
-      requestControllers.set(sender.tab.id, controller);
+    // 存储控制器 — use requestId if provided (regent), else tab-only key (main chat)
+    const controllerKey = makeControllerKey(sender?.tab?.id, request.requestId);
+    if (controllerKey != null) {
+      requestControllers.set(controllerKey, controller);
     }
 
     // 修复: 确保模型参数被正确添加到请求中
@@ -272,7 +278,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.url.includes('volcengine') || request.url.includes('volces.com')) {
           console.log(`❌ Volcengine请求失败: ${error.message}`);
           console.log(`❌ 请求URL: ${request.url}`);
-          console.log(`❌ 请求模型: ${JSON.parse(request.body || '{}').model || '未知'}`);
+          try { console.log(`❌ 请求模型: ${JSON.parse(request.body || '{}').model || '未知'}`); } catch {}
         }
 
         sendResponse({
@@ -282,8 +288,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       })
       .finally(() => {
         // 清理控制器
-        if (sender?.tab?.id) {
-          requestControllers.delete(sender.tab.id);
+        if (controllerKey != null) {
+          requestControllers.delete(controllerKey);
         }
       });
     };
@@ -295,10 +301,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "abortRequest") {
-    const controller = requestControllers.get(sender.tab.id);
-    if (controller) {
-      controller.abort();
-      requestControllers.delete(sender.tab.id);
+    const abortKey = makeControllerKey(sender?.tab?.id, request.requestId);
+    if (abortKey != null) {
+      const controller = requestControllers.get(abortKey);
+      if (controller) {
+        controller.abort();
+        requestControllers.delete(abortKey);
+      }
     }
     sendResponse({ success: true });
     return true;
