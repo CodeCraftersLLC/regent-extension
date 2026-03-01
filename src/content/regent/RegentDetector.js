@@ -389,7 +389,7 @@ export class RegentDetector {
   }
 
   /** Build compact DOM snapshot for AI analysis */
-  _buildDOMSnapshot(root = document.body, maxDepth = 8, maxSiblings = 15, maxChars = 8000) {
+  _buildDOMSnapshot(root = document.body, maxDepth = 100, maxSiblings = 15, maxChars = 8000) {
     const SKIP = new Set(['SCRIPT','STYLE','SVG','NOSCRIPT','IFRAME','CANVAS','VIDEO','AUDIO','HEAD','LINK','META']);
     const lines = [];
     let chars = 0;
