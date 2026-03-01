@@ -2,7 +2,7 @@
 const requestControllers = new Map(); // 存储请求控制器
 
 const makeControllerKey = (tabId, requestId) =>
-  requestId
+  requestId != null
     ? (tabId != null ? `${tabId}_${requestId}` : requestId)
     : tabId;
 
@@ -278,7 +278,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.url.includes('volcengine') || request.url.includes('volces.com')) {
           console.log(`❌ Volcengine请求失败: ${error.message}`);
           console.log(`❌ 请求URL: ${request.url}`);
-          console.log(`❌ 请求模型: ${JSON.parse(request.body || '{}').model || '未知'}`);
+          try { console.log(`❌ 请求模型: ${JSON.parse(request.body || '{}').model || '未知'}`); } catch {}
         }
 
         sendResponse({

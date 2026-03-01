@@ -189,15 +189,16 @@ class RegentOrchestratorClass {
   }
 }
 
-// Singleton
-const orchestrator = new RegentOrchestratorClass();
+// Lazy singleton — constructed only on first init() call
+let orchestrator = null;
 
 export function init() {
+  orchestrator ??= new RegentOrchestratorClass();
   return orchestrator.init();
 }
 
 export function destroy() {
-  return orchestrator.destroy();
+  return orchestrator?.destroy();
 }
 
 export default orchestrator;

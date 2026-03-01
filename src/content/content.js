@@ -12,7 +12,7 @@ console.log(`DeepSeek AI: Content script injected on ${window.location.href}`);
 // Regent: Coding agent orchestrator — configurable target hostnames
 const REGENT_HOSTNAMES = ['app.happy.engineering'];
 if (REGENT_HOSTNAMES.includes(location.hostname)) {
-  try { initRegent(); } catch (err) { console.warn('[Regent] Failed to init:', err); }
+  initRegent().catch(err => console.warn('[Regent] Failed to init:', err));
 }
 
 // State
