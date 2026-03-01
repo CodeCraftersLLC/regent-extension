@@ -316,29 +316,34 @@ export class RegentDetector {
   /** Enter calibration mode — user clicks a message to teach the detector */
   startCalibration() {
     return new Promise(resolve => {
-      const overlay = document.createElement('div');
-      Object.assign(overlay.style, {
-        position: 'fixed', inset: '0', zIndex: '2147483646',
-        background: 'rgba(0,0,0,0.3)', cursor: 'crosshair',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      });
-
       const prompt = document.createElement('div');
       Object.assign(prompt.style, {
-        background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '20px 32px',
-        borderRadius: '12px', fontSize: '16px', fontFamily: '-apple-system, sans-serif',
-        textAlign: 'center', maxWidth: '400px', lineHeight: '1.6',
+        position: 'fixed', top: '24px', left: '50%', transform: 'translateX(-50%)',
+        zIndex: '2147483646', pointerEvents: 'none',
+        background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '12px 24px',
+        borderRadius: '12px', fontSize: '14px', fontFamily: '-apple-system, sans-serif',
+        textAlign: 'center', maxWidth: '400px', lineHeight: '1.5',
         backdropFilter: 'blur(8px)',
       });
       prompt.textContent = 'Click on any chat message to help Regent learn the page structure.';
-      overlay.appendChild(prompt);
+      document.body.appendChild(prompt);
 
       let hoverEl = null;
+
+      const cleanup = () => {
+        if (hoverEl) hoverEl.style.outline = '';
+        prompt.remove();
+        document.removeEventListener('mousemove', onMove, true);
+        document.removeEventListener('click', onClick, true);
+        document.body.style.cursor = '';
+      };
+
+      document.body.style.cursor = 'crosshair';
 
       const onMove = e => {
         if (hoverEl) hoverEl.style.outline = '';
         hoverEl = document.elementFromPoint(e.clientX, e.clientY);
-        if (hoverEl && hoverEl !== overlay && !overlay.contains(hoverEl)) {
+        if (hoverEl && !prompt.contains(hoverEl)) {
           hoverEl.style.outline = '2px solid #007aff';
         }
       };
@@ -348,12 +353,9 @@ export class RegentDetector {
         e.stopPropagation();
 
         const target = document.elementFromPoint(e.clientX, e.clientY);
-        if (!target || target === overlay || overlay.contains(target)) return;
+        if (!target || prompt.contains(target)) return;
 
-        if (hoverEl) hoverEl.style.outline = '';
-        overlay.remove();
-        document.removeEventListener('mousemove', onMove, true);
-        document.removeEventListener('click', onClick, true);
+        cleanup();
 
         const messageSelector = this._buildSelector(target);
 
@@ -383,7 +385,6 @@ export class RegentDetector {
 
       document.addEventListener('mousemove', onMove, true);
       document.addEventListener('click', onClick, true);
-      document.body.appendChild(overlay);
     });
   }
 
