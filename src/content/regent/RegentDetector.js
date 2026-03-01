@@ -388,6 +388,59 @@ export class RegentDetector {
     });
   }
 
+  /** Build compact DOM snapshot for AI analysis */
+  _buildDOMSnapshot(root = document.body, maxDepth = 8, maxSiblings = 15, maxChars = 8000) {
+    const SKIP = new Set(['SCRIPT','STYLE','SVG','NOSCRIPT','IFRAME','CANVAS','VIDEO','AUDIO','HEAD','LINK','META']);
+    const lines = [];
+    let chars = 0;
+
+    const walk = (el, depth) => {
+      if (chars > maxChars || depth > maxDepth || SKIP.has(el.tagName)) return;
+
+      const tag = el.tagName.toLowerCase();
+      const parts = [tag];
+      if (el.id) parts.push(`#${el.id}`);
+      if (typeof el.className === 'string' && el.className.trim())
+        parts.push(`.${el.className.trim().split(/\s+/).slice(0, 4).join('.')}`);
+      for (const { name, value } of el.attributes) {
+        if (name === 'role') parts.push(`[role="${value}"]`);
+        else if (name.startsWith('data-') && value.length < 50) parts.push(`[${name}="${value}"]`);
+      }
+      if (el.getAttribute('style')?.includes('overflow')) parts.push('[style*="overflow"]');
+
+      const line = '  '.repeat(depth) + parts.join('');
+      lines.push(line);
+      chars += line.length + 1;
+
+      const children = [...el.children];
+      children.slice(0, maxSiblings).forEach(child => walk(child, depth + 1));
+      if (children.length > maxSiblings)
+        lines.push('  '.repeat(depth + 1) + `...${children.length - maxSiblings} more`);
+    };
+
+    walk(root, 0);
+    return lines.join('\n');
+  }
+
+  /** AI-powered auto-calibration — returns selectors or null */
+  async autoCalibrate(aiService) {
+    const snapshot = this._buildDOMSnapshot();
+    const selectors = await aiService.analyzeDOM(snapshot);
+    if (!selectors) return null;
+
+    // Validate: selectors must match real elements with messages inside
+    const sessions = this._safeQueryAll(document, selectors.session);
+    if (sessions.length === 0) return null;
+
+    const hasMessages = sessions.some(s => this._safeQueryAll(s, selectors.message).length > 0);
+    if (!hasMessages) return null;
+
+    this.selectors = selectors;
+    await this.saveSelectors(selectors);
+    console.log('[Regent] Auto-calibrated:', selectors);
+    return selectors;
+  }
+
   /** Stop all observation and restore monkey-patches */
   destroy() {
     this.bodyObserver?.disconnect();

@@ -230,7 +230,7 @@ export class RegentSidebar {
   }
 
   /** Show calibration UI */
-  showCalibration(onCalibrate) {
+  showCalibration(onCalibrate, onAutoCalibrate) {
     const empty = this.sessionsContainer.querySelector('.regent-empty');
     if (empty) empty.remove();
 
@@ -240,12 +240,23 @@ export class RegentSidebar {
       <p style="color: var(--regent-text-secondary); font-size: 13px; margin: 0 0 16px;">
         Regent couldn't auto-detect sessions on this page.
       </p>
-      <button class="regent-calibration-btn">
-        ⊕ Click a chat message to calibrate
-      </button>
+      ${onAutoCalibrate ? '<button class="regent-calibration-btn regent-auto-cal-btn">Auto-calibrate with AI</button>' : ''}
+      <button class="regent-calibration-btn regent-manual-cal-btn">Click a chat message to calibrate</button>
     `;
 
-    cal.querySelector('button').addEventListener('click', async () => {
+    const autoBtn = cal.querySelector('.regent-auto-cal-btn');
+    if (autoBtn) {
+      autoBtn.addEventListener('click', async () => {
+        autoBtn.textContent = 'Analyzing page...';
+        autoBtn.disabled = true;
+        const success = await onAutoCalibrate();
+        if (success) { cal.remove(); return; }
+        autoBtn.textContent = 'Auto-calibrate with AI';
+        autoBtn.disabled = false;
+      });
+    }
+
+    cal.querySelector('.regent-manual-cal-btn').addEventListener('click', async () => {
       cal.innerHTML = '<p style="color: var(--regent-text-secondary); font-size: 13px; padding: 8px;">Click any chat message on the page...</p>';
       await onCalibrate();
       cal.remove();

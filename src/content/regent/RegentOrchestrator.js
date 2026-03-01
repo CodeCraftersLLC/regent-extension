@@ -36,17 +36,28 @@ class RegentOrchestratorClass {
     await this.detector.loadSelectors();
 
     // Try to detect existing sessions
-    const sessions = this.detector.detectSessions();
+    let sessions = this.detector.detectSessions();
+
+    // Auto-calibrate via AI if detection failed
+    if (sessions.length === 0) {
+      try {
+        const selectors = await this.detector.autoCalibrate(this.aiService);
+        if (selectors) sessions = this.detector.detectSessions();
+      } catch (err) {
+        console.warn('[Regent] Auto-calibrate failed:', err.message);
+      }
+    }
 
     if (sessions.length > 0) {
-      // Sessions found — create sidecars
       for (const sessionEl of sessions) {
         const id = this.detector.getSessionId(sessionEl);
         this._createSidecar(id, sessionEl);
       }
     } else {
-      // No sessions found — show calibration option
-      this.sidebar.showCalibration(() => this._runCalibration());
+      this.sidebar.showCalibration(
+        () => this._runCalibration(),
+        () => this._runAutoCalibration(),
+      );
     }
 
     // Start observing for dynamic session changes
@@ -129,6 +140,24 @@ class RegentOrchestratorClass {
     for (const sessionEl of sessions) {
       const id = this.detector.getSessionId(sessionEl);
       this._createSidecar(id, sessionEl);
+    }
+  }
+
+  /** Retry auto-calibration from sidebar button */
+  async _runAutoCalibration() {
+    try {
+      const selectors = await this.detector.autoCalibrate(this.aiService);
+      if (!selectors) return false;
+
+      const sessions = this.detector.detectSessions();
+      for (const sessionEl of sessions) {
+        const id = this.detector.getSessionId(sessionEl);
+        this._createSidecar(id, sessionEl);
+      }
+      return sessions.length > 0;
+    } catch (err) {
+      console.warn('[Regent] Auto-calibrate retry failed:', err.message);
+      return false;
     }
   }
 

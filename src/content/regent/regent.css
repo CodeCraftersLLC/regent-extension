@@ -363,6 +363,8 @@
   transition: opacity 0.15s;
 }
 .regent-calibration-btn:hover { opacity: 0.85; }
+.regent-calibration-btn:disabled { opacity: 0.6; cursor: wait; }
+.regent-calibration-btn + .regent-calibration-btn { margin-top: 8px; }
 
 /* ─── Scrollbar smooth ─── */
 .regent-sessions {

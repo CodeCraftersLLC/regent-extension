@@ -19,6 +19,19 @@ Focus on: decisions made, errors encountered, files changed, features implemente
 Skip: routine acknowledgments, thinking/reasoning traces, repetitive back-and-forth.
 Return empty array [] if no significant events found.`;
 
+const DOM_ANALYSIS_PROMPT = `You are a DOM structure analyst for a browser extension. Given a simplified DOM tree, identify CSS selectors for a chat/coding-agent interface:
+
+1. **session**: The scrollable container holding chat messages (look for overflow scroll, role="log", repeated child elements with text content)
+2. **message**: Individual message elements inside that container (repeated siblings with uniform structure)
+
+Return ONLY a JSON object — no markdown, no code fences, no explanation:
+{"session": "css-selector", "message": "css-selector"}
+
+Rules:
+- Prefer stable selectors: IDs > data attributes > roles > semantic classes > tag paths
+- The message selector should match ALL messages within the session container
+- If no chat interface found, return {"session": null, "message": null}`;
+
 let _requestCounter = 0;
 
 export class RegentAIService {
@@ -207,6 +220,33 @@ export class RegentAIService {
     } catch (err) {
       console.warn('[Regent] Meta-summary error:', err.message);
       return '';
+    }
+  }
+
+  /** Analyze page DOM to discover session/message selectors */
+  async analyzeDOM(domSnapshot) {
+    const settings = await this._getSettings();
+    const { apiKey, apiUrl, model, provider } = this._resolveProvider(settings);
+
+    if (!apiKey || !model) {
+      console.warn(`[Regent] Cannot auto-calibrate: missing ${!apiKey ? 'API key' : 'model'} for "${provider}"`);
+      return null;
+    }
+
+    const content = await this._proxyRequest(apiUrl, apiKey, model, [
+      { role: 'system', content: DOM_ANALYSIS_PROMPT },
+      { role: 'user', content: domSnapshot },
+    ], 256);
+
+    if (!content) return null;
+
+    try {
+      const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
+      const result = JSON.parse(cleaned);
+      return result?.session && result?.message ? result : null;
+    } catch {
+      console.warn('[Regent] Failed to parse DOM analysis response');
+      return null;
     }
   }
 }
