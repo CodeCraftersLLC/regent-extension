@@ -37,7 +37,7 @@ function runMigrations(db: Database.Database) {
   );
 
   const migrationsDir = resolve(__dirname, 'migrations');
-  const files = ['001_foundation.sql', '002_memory_fts.sql'];
+  const files = ['001_foundation.sql', '002_memory_fts.sql', '003_agents_mcp.sql'];
 
   for (const file of files) {
     if (applied.has(file)) continue;

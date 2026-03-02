@@ -192,13 +192,27 @@ class RegentOrchestratorClass {
 
   /** Handle messages from mothership */
   _onMothershipEvent(data) {
-    if (data.type === 'events:cross') {
-      const { sessionId, events } = data.payload || {};
-      if (sessionId && events?.length) {
-        this.sidebar.addCrossSessionEvents(sessionId, events);
+    switch (data.type) {
+      case 'events:cross': {
+        const { sessionId, events } = data.payload || {};
+        if (sessionId && events?.length) this.sidebar.addCrossSessionEvents(sessionId, events);
+        break;
       }
-    } else if (data.type === 'context:results') {
-      this.sidebar.showSearchResults(data.payload);
+      case 'context:results':
+        this.sidebar.showSearchResults(data.payload);
+        break;
+      case 'agent:started':
+        this.sidebar.handleAgentStarted(data.payload);
+        break;
+      case 'agent:stream':
+        this.sidebar.handleAgentStream(data.payload);
+        break;
+      case 'agent:tool_call':
+        this.sidebar.handleAgentToolCall(data.payload);
+        break;
+      case 'agent:error':
+        this.sidebar.handleAgentError(data.payload);
+        break;
     }
   }
 

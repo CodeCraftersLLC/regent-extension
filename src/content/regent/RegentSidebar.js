@@ -56,6 +56,14 @@ export class RegentSidebar {
         <input class="regent-search-input" type="text" placeholder="Search memory..." />
       </div>
       <div class="regent-search-results" style="display:none"></div>
+      <div class="regent-agent-panel" style="display:none">
+        <div class="regent-agent-header">
+          <span class="regent-agent-title">Agents</span>
+          <button class="regent-agent-run-btn" title="Run agent">Run</button>
+        </div>
+        <input class="regent-agent-input" type="text" placeholder="Describe a task..." />
+        <div class="regent-agent-output"></div>
+      </div>
       <div class="regent-meta" style="display:none"></div>
       <div class="regent-sessions">
         <div class="regent-empty">
@@ -74,6 +82,21 @@ export class RegentSidebar {
     this._searchInput = this.sidebar.querySelector('.regent-search-input');
     this._searchResultsEl = this.sidebar.querySelector('.regent-search-results');
     this._searchDebounce = null;
+    this._agentPanel = this.sidebar.querySelector('.regent-agent-panel');
+    this._agentInput = this.sidebar.querySelector('.regent-agent-input');
+    this._agentOutput = this.sidebar.querySelector('.regent-agent-output');
+    this._currentRunId = null;
+
+    // Agent run button
+    this.sidebar.querySelector('.regent-agent-run-btn').addEventListener('click', () => {
+      const task = this._agentInput.value.trim();
+      if (!task) return;
+      this._agentOutput.textContent = 'Starting agent...';
+      chrome.runtime.sendMessage({
+        action: 'mothershipSend',
+        payload: { type: 'agent:start', payload: { input: task } },
+      }).catch(() => {});
+    });
 
     // Search input — debounced query via WS
     this._searchInput.addEventListener('input', () => {
@@ -294,9 +317,49 @@ export class RegentSidebar {
     const connected = status === 'connected';
     dot.classList.toggle('connected', connected);
     dot.title = `Mothership: ${connected ? 'connected' : 'disconnected'}`;
-    // Show/hide search bar based on connection
+    // Show/hide search bar and agent panel based on connection
     if (this._searchEl) this._searchEl.style.display = connected ? '' : 'none';
-    if (!connected) this._hideSearchResults();
+    if (this._agentPanel) this._agentPanel.style.display = connected ? '' : 'none';
+    if (!connected) {
+      this._hideSearchResults();
+      if (this._agentOutput) this._agentOutput.textContent = '';
+    }
+  }
+
+  /** Handle agent streaming chunks */
+  handleAgentStream(data) {
+    if (!this._agentOutput) return;
+    if (data.done) {
+      this._agentOutput.textContent += '\n--- Done ---';
+      this._currentRunId = null;
+      return;
+    }
+    if (data.chunk) {
+      if (this._agentOutput.textContent === 'Starting agent...') this._agentOutput.textContent = '';
+      this._agentOutput.textContent += data.chunk;
+    }
+  }
+
+  /** Handle agent started confirmation */
+  handleAgentStarted(data) {
+    this._currentRunId = data.runId;
+    if (this._agentOutput) this._agentOutput.textContent = '';
+  }
+
+  /** Handle agent tool call visualization */
+  handleAgentToolCall(data) {
+    if (!this._agentOutput) return;
+    const el = document.createElement('div');
+    el.className = 'regent-agent-tool-call';
+    el.textContent = `Tool: ${data.tool}`;
+    this._agentOutput.appendChild(el);
+  }
+
+  /** Handle agent error */
+  handleAgentError(data) {
+    if (!this._agentOutput) return;
+    this._agentOutput.textContent += `\nError: ${data.error}`;
+    this._currentRunId = null;
   }
 
   /** Display search results from mothership context:results */

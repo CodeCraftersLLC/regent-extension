@@ -84,3 +84,39 @@ export interface ProviderCredential {
   model: string | null;
   updated_at: string;
 }
+
+export interface Agent {
+  id: string;
+  workspace_id: string;
+  name: string;
+  system_prompt: string | null;
+  mcp_servers: string | null; // JSON array of MCP server IDs
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  agent_id: string;
+  workspace_id: string;
+  user_id: string;
+  input: string;
+  output: string | null;
+  session_id: string | null;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
+export interface McpServer {
+  id: string;
+  workspace_id: string;
+  name: string;
+  transport: 'stdio' | 'sse' | 'streamable-http';
+  config: string; // JSON
+  status: 'connected' | 'disconnected' | 'error';
+  tools_cache: string | null; // JSON
+  created_at: string;
+  updated_at: string;
+}

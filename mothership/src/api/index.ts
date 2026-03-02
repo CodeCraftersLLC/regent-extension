@@ -5,6 +5,8 @@ import { workspaceRoutes } from './routes/workspaces.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { eventRoutes } from './routes/events.js';
 import { memoryRoutes } from './routes/memory.js';
+import { agentRoutes } from './routes/agents.js';
+import { mcpRoutes } from './routes/mcp.js';
 
 export const api = new Hono().basePath('/api/v1');
 
@@ -19,3 +21,5 @@ api.route('/workspaces', workspaceRoutes);
 api.route('/workspaces/:wsId/sessions', sessionRoutes);
 api.route('/workspaces/:wsId/events', eventRoutes);
 api.route('/workspaces/:wsId/memory', memoryRoutes);
+api.route('/workspaces/:wsId/agents', agentRoutes);
+api.route('/workspaces/:wsId/mcp', mcpRoutes);

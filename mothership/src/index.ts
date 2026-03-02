@@ -4,6 +4,7 @@ import { api } from './api/index.js';
 import { attachWebSocket } from './ws/gateway.js';
 import { getDb, closeDb } from './db/index.js';
 import { startRetention, stopRetention } from './memory/retention.js';
+import { disconnectAll } from './mcp/pool.js';
 import { log } from './utils/logger.js';
 
 // Initialize database (runs migrations on first start)
@@ -25,6 +26,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     log.info('Shutting down...');
     stopRetention();
+    disconnectAll();
     closeDb();
     server.close();
     process.exit(0);

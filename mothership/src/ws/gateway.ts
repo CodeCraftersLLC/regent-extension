@@ -7,6 +7,7 @@ import { addConnection, removeConnection, broadcastToWorkspace } from './registr
 import { handleTabRegister } from './handlers/tabRegister.js';
 import { handleEventsStore } from './handlers/eventsStore.js';
 import { handleContextQuery } from './handlers/contextQuery.js';
+import { handleAgentStart, handleAgentStop } from './handlers/agentControl.js';
 import { upsertProviderCredentials } from '../memory/embeddings.js';
 import type { Connection } from './registry.js';
 
@@ -95,6 +96,12 @@ export function attachWebSocket(server: Server) {
             }
             break;
           }
+          case 'agent:start':
+            handleAgentStart(conn, msg.payload as any, send);
+            break;
+          case 'agent:stop':
+            handleAgentStop(conn, msg.payload as any, send);
+            break;
           case 'ping':
             send(ws, { type: 'pong', ts: Date.now() });
             break;

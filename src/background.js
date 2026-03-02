@@ -353,7 +353,7 @@ function mothershipConnect(url, token, tabId) {
     try {
       const msg = JSON.parse(event.data);
       // Forward relevant WS messages to all tabs running regent
-      if (['events:cross', 'connected', 'context:results'].includes(msg.type)) {
+      if (['events:cross', 'connected', 'context:results', 'agent:started', 'agent:stream', 'agent:tool_call', 'agent:error', 'agent:stopped'].includes(msg.type)) {
         chrome.tabs.query({}, (tabs) => {
           for (const tab of tabs) {
             chrome.tabs.sendMessage(tab.id, { type: 'mothershipEvent', data: msg }).catch(() => {});
