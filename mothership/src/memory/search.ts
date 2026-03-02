@@ -64,8 +64,15 @@ export async function hybridSearch(
   query: string,
   limit = 20,
 ): Promise<SearchResult[]> {
-  // Run FTS search (always available)
-  const ftsResults = searchFTS(workspaceId, query, limit);
+  limit = Math.min(limit, 100); // Cap to prevent abuse
+
+  // Run FTS search (may fail on malformed query syntax)
+  let ftsResults: SearchResult[] = [];
+  try {
+    ftsResults = searchFTS(workspaceId, query, limit);
+  } catch (err) {
+    log.debug({ err }, 'FTS search failed, falling back to vector-only');
+  }
 
   // Try vector search (requires embeddings)
   let vecResults: SearchResult[] = [];

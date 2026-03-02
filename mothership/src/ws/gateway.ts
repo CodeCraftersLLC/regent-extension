@@ -85,10 +85,16 @@ export function attachWebSocket(server: Server) {
           case 'context:query':
             handleContextQuery(conn, { ...(msg.payload as any), correlationId: msg.correlationId }, send);
             break;
-          case 'provider:credentials':
-            upsertProviderCredentials(conn.userId, msg.payload as any);
-            send(ws, { type: 'provider:ack', correlationId: msg.correlationId });
+          case 'provider:credentials': {
+            const creds = msg.payload as any;
+            if (creds?.provider && creds?.apiKey) {
+              upsertProviderCredentials(conn.userId, creds);
+              send(ws, { type: 'provider:ack', correlationId: msg.correlationId });
+            } else {
+              send(ws, { type: 'error', payload: { message: 'provider and apiKey required' }, correlationId: msg.correlationId });
+            }
             break;
+          }
           case 'ping':
             send(ws, { type: 'pong', ts: Date.now() });
             break;
