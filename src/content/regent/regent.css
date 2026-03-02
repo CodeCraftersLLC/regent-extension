@@ -111,6 +111,26 @@
   letter-spacing: -0.01em;
 }
 
+.regent-connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--regent-low);
+  display: inline-block;
+  margin: 0 4px;
+  transition: background 0.3s;
+}
+
+.regent-connection-dot.connected {
+  background: #34c759;
+  box-shadow: 0 0 6px rgba(52, 199, 89, 0.4);
+}
+
+.regent-session-remote .session-status.remote {
+  background: rgba(88, 86, 214, 0.12);
+  color: #5856d6;
+}
+
 .regent-badge {
   font-size: 11px;
   font-weight: 500;

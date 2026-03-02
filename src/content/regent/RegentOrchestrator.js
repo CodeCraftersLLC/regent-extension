@@ -69,6 +69,18 @@ class RegentOrchestratorClass {
 
     // Periodic meta-summary
     this._metaTimer = setInterval(() => this._generateMetaSummary(), META_SUMMARY_INTERVAL);
+
+    // Listen for mothership events (cross-session from other tabs/devices)
+    this._mothershipListener = (msg) => {
+      if (msg.type === 'mothershipEvent') this._onMothershipEvent(msg.data);
+      if (msg.type === 'mothershipStatus') this.sidebar.setConnectionStatus(msg.status);
+    };
+    chrome.runtime.onMessage.addListener(this._mothershipListener);
+
+    // Check initial mothership status
+    chrome.runtime.sendMessage({ action: 'mothershipStatus' }, (res) => {
+      this.sidebar.setConnectionStatus(res?.connected ? 'connected' : 'disconnected');
+    });
   }
 
   /** Create a sidecar for a session */
@@ -178,9 +190,20 @@ class RegentOrchestratorClass {
     this.sidebar.updateMeta(meta);
   }
 
+  /** Handle cross-session events from mothership */
+  _onMothershipEvent(data) {
+    if (data.type !== 'events:cross') return;
+    const { sessionId, events } = data.payload || {};
+    if (!sessionId || !events?.length) return;
+
+    // Display cross-session events in sidebar (no DOM element to scroll to)
+    this.sidebar.addCrossSessionEvents(sessionId, events);
+  }
+
   /** Destroy the entire regent system */
   destroy() {
     clearInterval(this._metaTimer);
+    if (this._mothershipListener) chrome.runtime.onMessage.removeListener(this._mothershipListener);
     this.detector.destroy();
     this.sidecars.forEach(s => s.destroy());
     this.sidecars.clear();

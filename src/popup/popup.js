@@ -8,6 +8,7 @@ import { ProviderUIManager } from './ProviderUIManager.js';
 import { EventManager } from './EventManager.js';
 import { TempStateManager } from './TempStateManager.js';
 import { SystemPromptManager } from './SystemPromptManager.js';
+import { MothershipManager } from './MothershipManager.js';
 
 class PopupManager {
   constructor() {
@@ -77,6 +78,7 @@ class PopupManager {
     // 确保先更新国际化标签
     this.i18nManager.updateLabels();
     this.eventManager.initializeEventListeners();
+    this.mothershipManager = new MothershipManager();
     this.loadInitialState();
   }
 

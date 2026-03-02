@@ -1705,6 +1705,31 @@
         </div>
       </div>
 
+      <!-- Mothership Connection -->
+      <div class="settings-section" id="mothershipSection">
+        <div class="setting-item">
+          <div class="setting-title">
+            <svg class="setting-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="200" height="200" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/>
+            </svg>
+            <span id="mothershipTitle">Mothership</span>
+          </div>
+        </div>
+        <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="mothershipStatusDot" style="width:8px;height:8px;border-radius:50%;background:#aaa;flex-shrink:0;"></span>
+            <span id="mothershipStatusText" style="font-size:12px;color:var(--text-secondary);">Disconnected</span>
+          </div>
+          <input type="text" id="mothershipUrl" class="input-field" placeholder="http://localhost:3001" style="width:100%;box-sizing:border-box;">
+          <input type="password" id="mothershipToken" class="input-field" placeholder="API token" style="width:100%;box-sizing:border-box;">
+          <div style="display:flex;gap:8px;">
+            <button id="mothershipConnectBtn" class="link-button" style="flex:1;text-align:center;padding:6px 12px;background:var(--accent-color,#007aff);color:white;border-radius:8px;border:none;cursor:pointer;font-size:12px;">Connect</button>
+            <button id="mothershipDisconnectBtn" class="link-button" style="flex:1;text-align:center;padding:6px 12px;background:var(--border-color,#e5e5e5);color:var(--text-primary);border-radius:8px;border:none;cursor:pointer;font-size:12px;display:none;">Disconnect</button>
+          </div>
+        </div>
+      </div>
+
       <div class="help-link">
         <div class="content-hint">
           <a href="#" id="instructionsLink">

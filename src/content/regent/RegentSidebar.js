@@ -46,6 +46,7 @@ export class RegentSidebar {
       <div class="regent-header">
         <div class="regent-header-content">
           <span class="regent-title">Regent</span>
+          <span class="regent-connection-dot" title="Mothership: disconnected"></span>
           <span class="regent-badge">0 sessions</span>
         </div>
         <button class="regent-collapse-btn" title="Collapse sidebar">◀</button>
@@ -263,6 +264,62 @@ export class RegentSidebar {
     });
 
     this.sessionsContainer.appendChild(cal);
+  }
+
+  /** Set mothership connection status indicator */
+  setConnectionStatus(status) {
+    const dot = this.sidebar?.querySelector('.regent-connection-dot');
+    if (!dot) return;
+    const connected = status === 'connected';
+    dot.classList.toggle('connected', connected);
+    dot.title = `Mothership: ${connected ? 'connected' : 'disconnected'}`;
+  }
+
+  /** Display cross-session events received from mothership (other tabs/devices) */
+  addCrossSessionEvents(sessionId, events) {
+    if (!events?.length) return;
+
+    // Get or create a "remote" session section
+    let section = this._sessionElements.get(`remote:${sessionId}`);
+    if (!section) {
+      const empty = this.sessionsContainer?.querySelector('.regent-empty');
+      if (empty) empty.remove();
+
+      section = document.createElement('div');
+      section.className = 'regent-session regent-session-remote';
+      section.dataset.sessionId = `remote:${sessionId}`;
+      section.innerHTML = `
+        <div class="regent-session-header">
+          <span class="session-name">Remote: ${this._escapeHtml(sessionId.slice(-8))}</span>
+          <span class="session-status remote">Remote</span>
+        </div>
+        <div class="regent-events"></div>
+      `;
+      this.sessionsContainer?.appendChild(section);
+      this._sessionElements.set(`remote:${sessionId}`, section);
+    }
+
+    const container = section.querySelector('.regent-events');
+    for (const evt of events) {
+      const el = document.createElement('div');
+      el.className = 'regent-event entering';
+      el.dataset.importance = evt.importance || 'medium';
+      const time = new Date(evt.created_at || Date.now()).toLocaleTimeString([], {
+        hour: '2-digit', minute: '2-digit',
+      });
+      el.innerHTML = `
+        <div class="event-content">
+          <div class="event-header">
+            <span class="event-title">${this._escapeHtml(evt.title)}</span>
+            <span class="event-time">${time}</span>
+          </div>
+          <div class="event-summary">${this._escapeHtml(evt.summary)}</div>
+        </div>
+      `;
+      container.appendChild(el);
+    }
+
+    this._updateBadge();
   }
 
   /** Update meta-summary */
