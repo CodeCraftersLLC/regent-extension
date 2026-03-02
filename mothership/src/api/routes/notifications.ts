@@ -7,23 +7,23 @@ import { getDb } from '../../db/index.js';
 import { newId } from '../../utils/id.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { bus } from '../../events/bus.js';
-import type { Notification } from '../../db/schema.js';
 
 export const notificationRoutes = new Hono();
 notificationRoutes.use('*', authMiddleware);
 
-/** GET /notifications — list user's notifications */
+/** GET /notifications — list with offset + limit pagination */
 notificationRoutes.get('/', (c) => {
   const { userId } = c.get('auth');
   const db = getDb();
   const limit = Math.min(parseInt(c.req.query('limit') || '50', 10) || 50, 100);
+  const offset = Math.max(parseInt(c.req.query('offset') || '0', 10) || 0, 0);
   const unreadOnly = c.req.query('unread') === 'true';
 
   const sql = unreadOnly
-    ? 'SELECT * FROM notifications WHERE user_id = ? AND read = 0 ORDER BY created_at DESC LIMIT ?'
-    : 'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?';
+    ? 'SELECT * FROM notifications WHERE user_id = ? AND read = 0 ORDER BY created_at DESC LIMIT ? OFFSET ?'
+    : 'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?';
 
-  return c.json(db.prepare(sql).all(userId, limit));
+  return c.json(db.prepare(sql).all(userId, limit, offset));
 });
 
 /** POST /notifications/:id/read — mark as read */
@@ -59,7 +59,6 @@ export function createNotification(userId: string, workspaceId: string, type: st
   db.prepare(`INSERT INTO notifications (id, user_id, workspace_id, type, title, body) VALUES (?, ?, ?, ?, ?, ?)`)
     .run(id, userId, workspaceId, type, title, body ?? null);
 
-  // Broadcast notification via bus so WS can push to connected clients
   bus.emit('notification:new', { userId, notification: { id, type, title, body, workspaceId } });
 }
 

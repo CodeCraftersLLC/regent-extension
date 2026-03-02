@@ -6,24 +6,14 @@ import { Hono } from 'hono';
 import { getDb } from '../../db/index.js';
 import { newId } from '../../utils/id.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { verifyMembership } from '../middleware/workspace.js';
 import { nanoid } from 'nanoid';
 import type { WorkspaceInvite } from '../../db/schema.js';
 
 export const inviteRoutes = new Hono();
 inviteRoutes.use('*', authMiddleware);
 
-function verifyMembership(c: any, requiredRole?: string) {
-  const wsId = c.req.param('wsId');
-  const { userId } = c.get('auth');
-  const db = getDb();
-  const member = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
-    .get(wsId, userId) as { role: string } | undefined;
-  if (!member) return null;
-  if (requiredRole && member.role !== 'owner' && member.role !== requiredRole) return null;
-  return { wsId, userId, db, role: member.role };
-}
-
-/** POST /workspaces/:wsId/invites — generate invite code (owner/admin only) */
+/** POST /workspaces/:wsId/invites — generate invite code (admin+) */
 inviteRoutes.post('/', async (c) => {
   const ctx = verifyMembership(c, 'admin');
   if (!ctx) return c.json({ error: 'Not found or insufficient permissions' }, 404);
@@ -34,7 +24,6 @@ inviteRoutes.post('/', async (c) => {
     expiresIn?: number; // hours
   }>();
 
-  // Validate role against allowed values
   const validRoles = ['admin', 'member', 'viewer'] as const;
   const inviteRole = validRoles.includes(role as any) ? role! : 'member';
   const uses = Math.max(1, Math.min(maxUses || 1, 100));
@@ -59,7 +48,6 @@ export async function redeemInvite(c: any) {
 
   const db = getDb();
 
-  // Atomic: validate + redeem inside a single transaction to prevent TOCTOU race
   const result = db.transaction(() => {
     const invite = db.prepare('SELECT * FROM workspace_invites WHERE code = ?').get(code) as WorkspaceInvite | null;
     if (!invite) return { error: 'Invalid invite code', status: 404 };
@@ -84,7 +72,7 @@ export async function redeemInvite(c: any) {
   return c.json(result);
 }
 
-/** GET /workspaces/:wsId/invites — list active invites */
+/** GET /workspaces/:wsId/invites — list active invites (admin+) */
 inviteRoutes.get('/', (c) => {
   const ctx = verifyMembership(c, 'admin');
   if (!ctx) return c.json({ error: 'Not found' }, 404);
@@ -96,7 +84,7 @@ inviteRoutes.get('/', (c) => {
   return c.json(invites);
 });
 
-/** DELETE /workspaces/:wsId/invites/:code — revoke invite */
+/** DELETE /workspaces/:wsId/invites/:code — revoke invite (admin+) */
 inviteRoutes.delete('/:code', (c) => {
   const ctx = verifyMembership(c, 'admin');
   if (!ctx) return c.json({ error: 'Not found' }, 404);

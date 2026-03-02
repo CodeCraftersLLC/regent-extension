@@ -4,26 +4,16 @@
  */
 
 import { Hono } from 'hono';
-import { getDb } from '../../db/index.js';
 import { newId } from '../../utils/id.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { verifyMembership } from '../middleware/workspace.js';
 import { hybridSearch } from '../../memory/search.js';
 import { embed, vectorToBlob } from '../../memory/embeddings.js';
-import type { MemoryEntry } from '../../db/schema.js';
 
 export const memoryRoutes = new Hono();
 memoryRoutes.use('*', authMiddleware);
 
-function verifyMembership(c: any) {
-  const wsId = c.req.param('wsId');
-  const { userId } = c.get('auth');
-  const db = getDb();
-  const member = db.prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, userId);
-  if (!member) return null;
-  return { wsId, userId, db };
-}
-
-/** POST /workspaces/:wsId/memory/search — hybrid search */
+/** POST /workspaces/:wsId/memory/search — hybrid search (viewer+) */
 memoryRoutes.post('/search', async (c) => {
   const ctx = verifyMembership(c);
   if (!ctx) return c.json({ error: 'Not found' }, 404);
@@ -45,12 +35,12 @@ memoryRoutes.post('/search', async (c) => {
   })));
 });
 
-/** GET /workspaces/:wsId/memory — list recent memory entries */
+/** GET /workspaces/:wsId/memory — list recent entries (viewer+) */
 memoryRoutes.get('/', (c) => {
   const ctx = verifyMembership(c);
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
-  const limit = parseInt(c.req.query('limit') || '50', 10);
+  const limit = Math.min(parseInt(c.req.query('limit') || '50', 10) || 50, 500);
   const sessionId = c.req.query('sessionId');
 
   const sql = sessionId
@@ -61,20 +51,20 @@ memoryRoutes.get('/', (c) => {
   return c.json(ctx.db.prepare(sql).all(...params));
 });
 
-/** POST /workspaces/:wsId/memory — create a memory entry (note/summary) */
+/** POST /workspaces/:wsId/memory — create entry (member+) */
 memoryRoutes.post('/', async (c) => {
-  const ctx = verifyMembership(c);
+  const ctx = verifyMembership(c, 'member');
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
   const { content, sourceType, sessionId, eventId } = await c.req.json<{
     content: string; sourceType?: string; sessionId?: string; eventId?: string;
   }>();
   if (!content) return c.json({ error: 'content required' }, 400);
+  if (content.length > 65536) return c.json({ error: 'content too long (max 64KB)' }, 400);
 
   const id = newId();
   const type = sourceType === 'summary' ? 'summary' : sourceType === 'note' ? 'note' : 'event';
 
-  // Try to generate embedding
   let embeddingBlob: Buffer | null = null;
   const result = await embed(ctx.userId, content);
   if (result) embeddingBlob = vectorToBlob(result.embedding);
@@ -86,9 +76,9 @@ memoryRoutes.post('/', async (c) => {
   return c.json({ id, source_type: type }, 201);
 });
 
-/** DELETE /workspaces/:wsId/memory/:id */
+/** DELETE /workspaces/:wsId/memory/:id — admin+ */
 memoryRoutes.delete('/:id', (c) => {
-  const ctx = verifyMembership(c);
+  const ctx = verifyMembership(c, 'admin');
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
   const result = ctx.db.prepare('DELETE FROM memory_entries WHERE id = ? AND workspace_id = ?')

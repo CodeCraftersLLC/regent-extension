@@ -16,9 +16,20 @@ export interface SearchResult {
 
 const RRF_K = 60; // Standard RRF constant
 
+/** Sanitize FTS5 query — strip special operators, wrap terms in quotes */
+function sanitizeFtsQuery(query: string): string {
+  const terms = query
+    .replace(/["\-*(){}:^~|<>]/g, ' ')    // Strip FTS5 special chars
+    .split(/\s+/)
+    .filter(t => t.length > 0 && t.length < 100); // Drop empty and absurdly long terms
+  if (!terms.length) return '""';
+  return terms.map(t => `"${t}"`).join(' ');
+}
+
 /** Full-text search via FTS5 with BM25 ranking */
 export function searchFTS(workspaceId: string, query: string, limit = 20): SearchResult[] {
   const db = getDb();
+  const safeQuery = sanitizeFtsQuery(query);
   const rows = db.prepare(`
     SELECT me.id, me.workspace_id, me.session_id, me.event_id, me.content, me.source_type, me.created_at, rank
     FROM memory_fts fts
@@ -26,7 +37,7 @@ export function searchFTS(workspaceId: string, query: string, limit = 20): Searc
     WHERE memory_fts MATCH ? AND me.workspace_id = ?
     ORDER BY rank
     LIMIT ?
-  `).all(query, workspaceId, limit) as (MemoryEntry & { rank: number })[];
+  `).all(safeQuery, workspaceId, limit) as (MemoryEntry & { rank: number })[];
 
   return rows.map((r, i) => ({
     entry: r,

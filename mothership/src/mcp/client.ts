@@ -7,12 +7,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { log } from '../utils/logger.js';
 
-/** Allowed MCP commands — only these can be spawned via stdio transport */
+/** Allowed MCP commands — only bare names, no paths allowed */
 const ALLOWED_COMMANDS = new Set([
   'npx', 'node', 'python', 'python3', 'uvx', 'docker',
   'mcp-server-fetch', 'mcp-server-filesystem', 'mcp-server-github',
   'mcp-server-postgres', 'mcp-server-sqlite', 'mcp-server-memory',
 ]);
+
+/** Blocked interpreter flags that enable arbitrary code execution */
+const BLOCKED_FLAGS = new Set(['-e', '--eval', '-c', '--command', '--exec', '-i', '--interactive']);
 
 /** Env vars that cannot be overridden (privilege escalation prevention) */
 const BLOCKED_ENV_KEYS = new Set([
@@ -24,8 +27,19 @@ const BLOCKED_ENV_KEYS = new Set([
 function validateUrl(url: string) {
   const parsed = new URL(url);
   const hostname = parsed.hostname;
-  if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|localhost$|::1$|\[::1\]$)/i.test(hostname)) {
+
+  // Block credentials in URL
+  if (parsed.username || parsed.password) {
+    throw new Error('Blocked: credentials in URL not allowed');
+  }
+
+  // Comprehensive private IP check including IPv6
+  if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|localhost$|::1$|\[::1\]$|fe80:|fc00:|fd00:|0x|0[0-7])/i.test(hostname)) {
     throw new Error(`Blocked: private/internal address ${hostname}`);
+  }
+  // Block cloud metadata hostnames
+  if (/^(metadata\.google\.internal|instance-data|169\.254\.169\.254)$/i.test(hostname)) {
+    throw new Error(`Blocked: cloud metadata address ${hostname}`);
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     throw new Error(`Blocked: unsupported protocol ${parsed.protocol}`);
@@ -122,10 +136,19 @@ export class McpClient {
     const { command, args = [], env } = this.config;
     if (!command) throw new Error('stdio transport requires command');
 
-    // Security: validate command against allowlist
-    const baseName = command.split('/').pop()!;
-    if (!ALLOWED_COMMANDS.has(baseName)) {
-      throw new Error(`Blocked: command '${baseName}' not in allowlist. Allowed: ${[...ALLOWED_COMMANDS].join(', ')}`);
+    // Security: reject absolute/relative paths — only bare command names via PATH resolution
+    if (command.includes('/') || command.includes('\\')) {
+      throw new Error('Blocked: absolute/relative paths not allowed — use bare command names only');
+    }
+    if (!ALLOWED_COMMANDS.has(command)) {
+      throw new Error(`Blocked: command '${command}' not in allowlist. Allowed: ${[...ALLOWED_COMMANDS].join(', ')}`);
+    }
+
+    // Security: block dangerous interpreter flags that allow arbitrary code execution
+    for (const arg of args) {
+      if (BLOCKED_FLAGS.has(arg)) {
+        throw new Error(`Blocked: dangerous flag '${arg}' not allowed in MCP args`);
+      }
     }
 
     // Security: strip blocked env vars
@@ -212,6 +235,9 @@ export class McpClient {
   }
 
   private async httpRequest(method: string, params: Record<string, unknown>): Promise<any> {
+    // Re-validate URL on every request (defense-in-depth against config mutation)
+    validateUrl(this.config.url!);
+
     const id = this.nextId++;
     const req: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
 

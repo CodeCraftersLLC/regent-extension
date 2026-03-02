@@ -3,7 +3,8 @@ import type { Server } from 'node:http';
 import { verifyToken } from '../utils/crypto.js';
 import { log } from '../utils/logger.js';
 import { bus } from '../events/bus.js';
-import { addConnection, removeConnection, broadcastToWorkspace } from './registry.js';
+import { getDb } from '../db/index.js';
+import { addConnection, removeConnection } from './registry.js';
 import { handleTabRegister } from './handlers/tabRegister.js';
 import { handleEventsStore } from './handlers/eventsStore.js';
 import { handleContextQuery } from './handlers/contextQuery.js';
@@ -12,6 +13,7 @@ import { upsertProviderCredentials } from '../memory/embeddings.js';
 import type { Connection } from './registry.js';
 
 const HEARTBEAT_INTERVAL = 30_000;
+const AUTH_TIMEOUT = 10_000; // 10s to send auth message
 
 interface WsEnvelope {
   type: string;
@@ -27,28 +29,90 @@ function send(ws: WebSocket, msg: WsEnvelope) {
 export function attachWebSocket(server: Server) {
   const wss = new WebSocketServer({ noServer: true });
 
-  // Handle HTTP upgrade with token auth
-  server.on('upgrade', async (req, socket, head) => {
-    try {
-      const url = new URL(req.url || '/', `http://${req.headers.host}`);
-      const token = url.searchParams.get('token');
-      if (!token) throw new Error('No token');
+  // Accept upgrade without token in URL — auth happens via first message
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host}`);
 
-      const payload = await verifyToken(token);
-      const userId = payload.sub as string;
-      const username = payload.username as string;
-      const tabId = url.searchParams.get('tabId') || `tab-${Date.now()}`;
+    // Support both: legacy URL token (for backwards compat) and Sec-WebSocket-Protocol header
+    const urlToken = url.searchParams.get('token');
+    const headerToken = req.headers['sec-websocket-protocol'];
+    const tabId = url.searchParams.get('tabId') || `tab-${Date.now()}`;
 
+    if (urlToken || headerToken) {
+      // Authenticate immediately (legacy mode or header mode)
+      const token = headerToken || urlToken!;
+      verifyToken(token)
+        .then(payload => {
+          const subprotocols = headerToken ? [headerToken] : undefined;
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            wss.emit('connection', ws, {
+              userId: payload.sub as string,
+              username: payload.username as string,
+              tabId,
+              authenticated: true,
+            });
+          });
+        })
+        .catch(() => {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+        });
+    } else {
+      // First-message auth mode
       wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, { userId, username, tabId });
+        wss.emit('connection', ws, { userId: '', username: '', tabId, authenticated: false });
       });
-    } catch {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
     }
   });
 
-  wss.on('connection', (ws: WebSocket, meta: { userId: string; username: string; tabId: string }) => {
+  wss.on('connection', (ws: WebSocket, meta: { userId: string; username: string; tabId: string; authenticated: boolean }) => {
+    // If not yet authenticated, wait for auth message
+    if (!meta.authenticated) {
+      const authTimer = setTimeout(() => {
+        send(ws, { type: 'error', payload: { message: 'Auth timeout — send auth message within 10s' } });
+        ws.close(4001, 'Auth timeout');
+      }, AUTH_TIMEOUT);
+
+      ws.once('message', async (raw) => {
+        clearTimeout(authTimer);
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type !== 'auth' || !msg.payload?.token) {
+            send(ws, { type: 'error', payload: { message: 'First message must be auth' } });
+            ws.close(4002, 'Auth required');
+            return;
+          }
+          const payload = await verifyToken(msg.payload.token);
+
+          // Token revocation check
+          const userId = payload.sub as string;
+          if (payload.iat) {
+            const db = getDb();
+            const user = db.prepare('SELECT updated_at FROM users WHERE id = ?').get(userId) as { updated_at: string } | undefined;
+            if (user && (payload.iat as number) * 1000 < new Date(user.updated_at).getTime()) {
+              send(ws, { type: 'error', payload: { message: 'Token revoked' } });
+              ws.close(4001, 'Token revoked');
+              return;
+            }
+          }
+
+          meta.userId = userId;
+          meta.username = payload.username as string;
+          meta.tabId = msg.payload.tabId || meta.tabId;
+          meta.authenticated = true;
+          setupConnection(ws, meta);
+        } catch {
+          send(ws, { type: 'error', payload: { message: 'Invalid token' } });
+          ws.close(4001, 'Invalid token');
+        }
+      });
+      return;
+    }
+
+    setupConnection(ws, meta);
+  });
+
+  function setupConnection(ws: WebSocket, meta: { userId: string; username: string; tabId: string }) {
     const conn: Connection = { ws, userId: meta.userId, tabId: meta.tabId, workspaceId: null };
     addConnection(conn);
     log.info({ userId: meta.userId, tabId: meta.tabId }, 'WS connected');
@@ -129,7 +193,7 @@ export function attachWebSocket(server: Server) {
       removeConnection(meta.userId, meta.tabId);
       log.info({ userId: meta.userId, tabId: meta.tabId }, 'WS disconnected');
     });
-  });
+  }
 
   return wss;
 }

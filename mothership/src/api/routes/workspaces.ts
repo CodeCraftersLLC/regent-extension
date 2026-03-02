@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { getDb } from '../../db/index.js';
 import { newId } from '../../utils/id.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { checkRateLimit } from '../../utils/rateLimit.js';
 import type { Workspace } from '../../db/schema.js';
 
 export const workspaceRoutes = new Hono();
@@ -20,11 +21,16 @@ workspaceRoutes.get('/', (c) => {
   return c.json(rows);
 });
 
-// POST /workspaces
+// POST /workspaces — rate limited
 workspaceRoutes.post('/', async (c) => {
   const { userId } = c.get('auth');
   const { name } = await c.req.json<{ name: string }>();
-  if (!name) return c.json({ error: 'Name required' }, 400);
+  if (!name || name.length > 128) return c.json({ error: 'Name required (max 128 chars)' }, 400);
+
+  // Rate limit workspace creation
+  if (!checkRateLimit(userId, 'workspace_create', 5)) {
+    return c.json({ error: 'Too many workspaces created, try again later' }, 429);
+  }
 
   const db = getDb();
   const id = newId();

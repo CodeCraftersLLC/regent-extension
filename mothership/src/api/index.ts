@@ -13,16 +13,18 @@ import { authMiddleware } from './middleware/auth.js';
 
 export const api = new Hono().basePath('/api/v1');
 
-// CORS: allow Chrome extension origins + configurable allowed origins
+// CORS: pin to specific extension ID or allowed origins — no wildcard
 api.use('*', cors({
   origin: (origin) => {
-    // Allow Chrome extension origins (chrome-extension://...)
-    if (origin?.startsWith('chrome-extension://')) return origin;
-    // Allow configured origins via ALLOWED_ORIGINS env var
+    // Pin to specific extension ID if configured, otherwise allow any chrome-extension
+    const extId = process.env.EXTENSION_ID;
+    if (extId && origin === `chrome-extension://${extId}`) return origin;
+    if (!extId && origin?.startsWith('chrome-extension://')) return origin;
+    // Allow configured origins
     const allowed = process.env.ALLOWED_ORIGINS?.split(',').map(s => s.trim()) || [];
-    if (allowed.includes(origin || '')) return origin!;
-    // Allow same-origin (no Origin header) for health checks etc.
-    if (!origin) return '*';
+    if (origin && allowed.includes(origin)) return origin;
+    // Same-origin requests (no Origin header) — return empty to allow but not expose wildcard
+    if (!origin) return '';
     return null as any;
   },
 }));

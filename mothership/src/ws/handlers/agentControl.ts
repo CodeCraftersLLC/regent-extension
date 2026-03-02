@@ -26,6 +26,17 @@ function trackListener(conn: Connection, event: string, fn: (...args: any[]) => 
   bus.on(event, fn);
 }
 
+function untrackListener(conn: Connection, fn: (...args: any[]) => void) {
+  const key = connKey(conn);
+  const arr = connectionListeners.get(key);
+  if (!arr) return;
+  const idx = arr.findIndex(l => l.fn === fn);
+  if (idx !== -1) {
+    bus.off(arr[idx].event, arr[idx].fn);
+    arr.splice(idx, 1);
+  }
+}
+
 /** Clean up all agent bus listeners for a connection — call from gateway on WS close */
 export function cleanupAgentListeners(conn: Connection) {
   const key = connKey(conn);
@@ -55,10 +66,15 @@ export function handleAgentStart(conn: Connection, payload: AgentStartPayload, s
     .then(runId => {
       send(conn.ws, { type: 'agent:started', payload: { runId, agentId } });
 
+      let safetyTimer: ReturnType<typeof setTimeout> | null = null;
+
       const cleanup = () => {
-        bus.off('agent:stream', onStream);
-        bus.off('agent:tool_call', onToolCall);
-        bus.off('agent:error', onError);
+        // Clear the safety timeout
+        if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+        // Remove from both bus AND connectionListeners tracking
+        untrackListener(conn, onStream);
+        untrackListener(conn, onToolCall);
+        untrackListener(conn, onError);
       };
 
       const onStream = (data: any) => {
@@ -80,8 +96,8 @@ export function handleAgentStart(conn: Connection, payload: AgentStartPayload, s
       trackListener(conn, 'agent:tool_call', onToolCall);
       trackListener(conn, 'agent:error', onError);
 
-      // Safety net: auto-cleanup after 5 minutes
-      setTimeout(cleanup, 5 * 60 * 1000);
+      // Safety net: auto-cleanup after 5 minutes (clearable)
+      safetyTimer = setTimeout(cleanup, 5 * 60 * 1000);
     })
     .catch(err => {
       log.warn({ err, agentId }, 'Agent start failed');

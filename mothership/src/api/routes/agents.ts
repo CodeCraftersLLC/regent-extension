@@ -3,8 +3,8 @@
  */
 
 import { Hono } from 'hono';
-import { getDb } from '../../db/index.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { verifyMembership } from '../middleware/workspace.js';
 import { createAgent, listAgents, getAgent, deleteAgent } from '../../agents/manager.js';
 import { startRun, cancelRun, getRun, listRuns } from '../../agents/runtime.js';
 import { checkRateLimit } from '../../utils/rateLimit.js';
@@ -12,25 +12,16 @@ import { checkRateLimit } from '../../utils/rateLimit.js';
 export const agentRoutes = new Hono();
 agentRoutes.use('*', authMiddleware);
 
-function verifyMembership(c: any) {
-  const wsId = c.req.param('wsId');
-  const { userId } = c.get('auth');
-  const db = getDb();
-  const member = db.prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, userId);
-  if (!member) return null;
-  return { wsId, userId, db };
-}
-
-/** GET /workspaces/:wsId/agents */
+/** GET /workspaces/:wsId/agents — viewer+ */
 agentRoutes.get('/', (c) => {
   const ctx = verifyMembership(c);
   if (!ctx) return c.json({ error: 'Not found' }, 404);
   return c.json(listAgents(ctx.wsId));
 });
 
-/** POST /workspaces/:wsId/agents */
+/** POST /workspaces/:wsId/agents — admin+ */
 agentRoutes.post('/', async (c) => {
-  const ctx = verifyMembership(c);
+  const ctx = verifyMembership(c, 'admin');
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
   const { name, systemPrompt, mcpServers } = await c.req.json<{
@@ -43,9 +34,9 @@ agentRoutes.post('/', async (c) => {
   return c.json(agent, 201);
 });
 
-/** DELETE /workspaces/:wsId/agents/:id */
+/** DELETE /workspaces/:wsId/agents/:id — admin+ */
 agentRoutes.delete('/:id', (c) => {
-  const ctx = verifyMembership(c);
+  const ctx = verifyMembership(c, 'admin');
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
   const ok = deleteAgent(c.req.param('id'), ctx.wsId);
@@ -53,9 +44,9 @@ agentRoutes.delete('/:id', (c) => {
   return c.json({ ok: true });
 });
 
-/** POST /workspaces/:wsId/agents/:id/run */
+/** POST /workspaces/:wsId/agents/:id/run — member+ */
 agentRoutes.post('/:id/run', async (c) => {
-  const ctx = verifyMembership(c);
+  const ctx = verifyMembership(c, 'member');
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
   const agent = getAgent(c.req.param('id'));
@@ -64,7 +55,6 @@ agentRoutes.post('/:id/run', async (c) => {
   const { input, sessionId } = await c.req.json<{ input: string; sessionId?: string }>();
   if (!input || input.length > 32768) return c.json({ error: 'input required (max 32KB)' }, 400);
 
-  // Rate limit: token bucket per user
   if (!checkRateLimit(ctx.userId, 'agent_runs', 5)) {
     return c.json({ error: 'Rate limit exceeded' }, 429);
   }
@@ -73,7 +63,7 @@ agentRoutes.post('/:id/run', async (c) => {
   return c.json({ runId, status: 'running' }, 201);
 });
 
-/** GET /workspaces/:wsId/agents/:id/runs */
+/** GET /workspaces/:wsId/agents/:id/runs — viewer+ */
 agentRoutes.get('/:id/runs', (c) => {
   const ctx = verifyMembership(c);
   if (!ctx) return c.json({ error: 'Not found' }, 404);
@@ -85,7 +75,7 @@ agentRoutes.get('/:id/runs', (c) => {
   return c.json(listRuns(agent.id, limit));
 });
 
-/** GET /workspaces/:wsId/agents/:id/runs/:rid */
+/** GET /workspaces/:wsId/agents/:id/runs/:rid — viewer+ */
 agentRoutes.get('/:id/runs/:rid', (c) => {
   const ctx = verifyMembership(c);
   if (!ctx) return c.json({ error: 'Not found' }, 404);
@@ -95,12 +85,11 @@ agentRoutes.get('/:id/runs/:rid', (c) => {
   return c.json(run);
 });
 
-/** POST /workspaces/:wsId/agents/:id/runs/:rid/cancel */
+/** POST /workspaces/:wsId/agents/:id/runs/:rid/cancel — member+ */
 agentRoutes.post('/:id/runs/:rid/cancel', (c) => {
-  const ctx = verifyMembership(c);
+  const ctx = verifyMembership(c, 'member');
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
-  // Verify run belongs to this agent + workspace
   const run = getRun(c.req.param('rid'));
   if (!run || run.agent_id !== c.req.param('id') || run.workspace_id !== ctx.wsId) {
     return c.json({ error: 'Run not found' }, 404);

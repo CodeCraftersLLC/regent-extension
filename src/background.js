@@ -329,11 +329,16 @@ const MOTHERSHIP_MAX_RECONNECT = 30000;
 function mothershipConnect(url, token, tabId) {
   mothershipDisconnect();
 
-  const wsUrl = `${url.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(token)}&tabId=${tabId || Date.now()}`;
+  // Connect without token in URL — authenticate via first message
+  const wsUrl = `${url.replace(/^http/, 'ws')}/ws`;
   mothershipWs = new WebSocket(wsUrl);
 
   mothershipWs.onopen = () => {
     mothershipReconnectDelay = 1000;
+    // Authenticate via first message (not URL query)
+    if (mothershipWs?.readyState === WebSocket.OPEN) {
+      mothershipWs.send(JSON.stringify({ type: 'auth', payload: { token, tabId: tabId || `tab-${Date.now()}` } }));
+    }
     // Register with workspace (from local) + forward provider credentials (from sync)
     chrome.storage.local.get(['mothershipWorkspaceId'], (localData) => {
       if (localData.mothershipWorkspaceId && mothershipWs?.readyState === WebSocket.OPEN) {

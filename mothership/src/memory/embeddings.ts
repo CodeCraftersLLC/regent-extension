@@ -1,11 +1,12 @@
 /**
  * Provider-agnostic embedding client.
  * Uses the user's own API provider (OpenAI-compatible /v1/embeddings format).
- * Credentials stored per-user in provider_credentials table.
+ * Credentials stored per-user, API keys encrypted at rest (AES-256-GCM).
  */
 
 import { getDb } from '../db/index.js';
 import { log } from '../utils/logger.js';
+import { encryptSecret, decryptSecret } from '../utils/crypto.js';
 import type { ProviderCredential } from '../db/schema.js';
 
 /** Default embedding model per provider */
@@ -21,20 +22,30 @@ export interface EmbeddingResult {
   dimensions: number;
 }
 
-/** Get user's provider credentials from DB */
+/** Get user's provider credentials from DB — decrypts API key */
 export function getProviderCredentials(userId: string): ProviderCredential | null {
   const db = getDb();
-  return db.prepare('SELECT * FROM provider_credentials WHERE user_id = ?').get(userId) as ProviderCredential | null;
+  const row = db.prepare('SELECT * FROM provider_credentials WHERE user_id = ?').get(userId) as ProviderCredential | null;
+  if (!row) return null;
+
+  // Decrypt the API key (handle legacy plaintext keys gracefully)
+  try {
+    row.api_key = row.api_key.includes(':') ? decryptSecret(row.api_key) : row.api_key;
+  } catch {
+    // Legacy plaintext key — will be re-encrypted on next upsert
+  }
+  return row;
 }
 
-/** Store/update provider credentials */
+/** Store/update provider credentials — encrypts API key at rest */
 export function upsertProviderCredentials(userId: string, creds: { provider: string; apiKey: string; apiUrl?: string; model?: string }) {
   const db = getDb();
+  const encryptedKey = encryptSecret(creds.apiKey);
   db.prepare(`INSERT INTO provider_credentials (user_id, provider, api_key, api_url, model, updated_at)
     VALUES (?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_key=excluded.api_key,
     api_url=excluded.api_url, model=excluded.model, updated_at=datetime('now')`)
-    .run(userId, creds.provider, creds.apiKey, creds.apiUrl ?? null, creds.model ?? null);
+    .run(userId, creds.provider, encryptedKey, creds.apiUrl ?? null, creds.model ?? null);
 }
 
 /** Generate embedding vector for text using user's configured provider */
