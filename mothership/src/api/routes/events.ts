@@ -8,12 +8,24 @@ import type { RegentEvent } from '../../db/schema.js';
 export const eventRoutes = new Hono();
 eventRoutes.use('*', authMiddleware);
 
+/** Verify the authenticated user is a member of the workspace */
+function verifyMembership(c: any) {
+  const wsId = c.req.param('wsId');
+  const { userId } = c.get('auth');
+  const db = getDb();
+  const member = db.prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, userId);
+  if (!member) return null;
+  return { wsId, userId, db };
+}
+
 // GET /workspaces/:wsId/events — list events, optionally filtered by session
 eventRoutes.get('/', (c) => {
-  const wsId = c.req.param('wsId');
+  const ctx = verifyMembership(c);
+  if (!ctx) return c.json({ error: 'Not found' }, 404);
+  const { wsId, db } = ctx;
+
   const sessionId = c.req.query('sessionId');
   const limit = parseInt(c.req.query('limit') || '100', 10);
-  const db = getDb();
 
   const sql = sessionId
     ? 'SELECT * FROM events WHERE workspace_id = ? AND session_id = ? ORDER BY created_at DESC LIMIT ?'
@@ -25,7 +37,10 @@ eventRoutes.get('/', (c) => {
 
 // POST /workspaces/:wsId/events/bulk — store pre-extracted events from extension
 eventRoutes.post('/bulk', async (c) => {
-  const wsId = c.req.param('wsId')!;
+  const ctx = verifyMembership(c);
+  if (!ctx) return c.json({ error: 'Not found' }, 404);
+  const { wsId, db } = ctx;
+
   const { sessionId, events } = await c.req.json<{
     sessionId: string;
     events: Array<{ title: string; summary: string; importance?: string; messageIndex?: number }>;
@@ -34,8 +49,6 @@ eventRoutes.post('/bulk', async (c) => {
   if (!sessionId || !events?.length) {
     return c.json({ error: 'sessionId and events[] required' }, 400);
   }
-
-  const db = getDb();
 
   // Ensure session exists (upsert)
   const existingSession = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
@@ -63,7 +76,7 @@ eventRoutes.post('/bulk', async (c) => {
   tx();
 
   // Broadcast to all connected tabs in this workspace
-  bus.emit('events:new', { workspaceId: wsId, sessionId, events: stored });
+  bus.emit('events:new', { workspaceId: wsId, sessionId, events: stored, sourceTabId: null });
 
   return c.json({ stored: stored.length }, 201);
 });

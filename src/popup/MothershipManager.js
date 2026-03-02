@@ -42,19 +42,38 @@ export class MothershipManager {
     this.connectBtn.textContent = 'Connecting...';
     this.connectBtn.disabled = true;
 
-    // Verify token by calling health + auth check
+    // Verify token by calling health + fetch user's workspaces
     try {
-      const res = await fetch(`${url}/api/v1/health`);
-      if (!res.ok) throw new Error('Server unreachable');
+      const healthRes = await fetch(`${url}/api/v1/health`);
+      if (!healthRes.ok) throw new Error('Server unreachable');
+
+      // Fetch workspaces to get the default workspaceId
+      const wsRes = await fetch(`${url}/api/v1/workspaces`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!wsRes.ok) {
+        this._showError('Invalid token');
+        this.connectBtn.textContent = 'Connect';
+        this.connectBtn.disabled = false;
+        return;
+      }
+      const workspaces = await wsRes.json();
+      const workspaceId = workspaces[0]?.id;
+      if (!workspaceId) {
+        this._showError('No workspace found');
+        this.connectBtn.textContent = 'Connect';
+        this.connectBtn.disabled = false;
+        return;
+      }
+
+      // Store credentials + workspaceId
+      chrome.storage.sync.set({ mothershipUrl: url, mothershipToken: token, mothershipWorkspaceId: workspaceId });
     } catch {
       this._showError('Cannot reach server');
       this.connectBtn.textContent = 'Connect';
       this.connectBtn.disabled = false;
       return;
     }
-
-    // Store credentials
-    chrome.storage.sync.set({ mothershipUrl: url, mothershipToken: token });
 
     // Tell background to connect
     chrome.runtime.sendMessage({ action: 'mothershipConnect', url, token }, () => {
