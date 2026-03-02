@@ -92,6 +92,9 @@ export class RegentSidecar {
 
       this._processedCount += batch.length;
       this.onEventsUpdate?.(this.sessionId, this.events);
+
+      // Forward extracted events to mothership (fire-and-forget)
+      this._forwardToMothership(aiEvents);
     } catch (err) {
       console.warn(`[Regent:Sidecar:${this.sessionId}] Summarization failed:`, err.message);
       // Drop failed batch to avoid infinite retry loop — messages are lost but system stays stable
@@ -106,6 +109,28 @@ export class RegentSidecar {
         this._timer = setTimeout(() => this._triggerSummarize(), TIME_THRESHOLD);
       }
     }
+  }
+
+  /** Forward extracted events to mothership via background WS */
+  _forwardToMothership(aiEvents) {
+    if (!aiEvents?.length) return;
+    chrome.runtime.sendMessage({
+      action: 'mothershipSend',
+      payload: {
+        type: 'events:store',
+        payload: {
+          sessionId: this.sessionId,
+          sessionName: this.getDisplayName(),
+          url: location.href,
+          hostname: location.hostname,
+          events: aiEvents.map(e => ({
+            title: e.title, summary: e.summary,
+            importance: e.importance || 'medium',
+            messageIndex: e.messageIndex,
+          })),
+        },
+      },
+    }).catch(() => {}); // Silent fail — mothership is optional
   }
 
   /** Get session display name */

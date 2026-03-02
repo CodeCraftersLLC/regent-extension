@@ -319,6 +319,132 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// ─── Mothership WebSocket Connection Manager ───
+
+let mothershipWs = null;
+let mothershipReconnectTimer = null;
+let mothershipReconnectDelay = 1000;
+const MOTHERSHIP_MAX_RECONNECT = 30000;
+
+function mothershipConnect(url, token, tabId) {
+  mothershipDisconnect();
+
+  // Connect without token in URL — authenticate via first message
+  const wsUrl = `${url.replace(/^http/, 'ws')}/ws`;
+  mothershipWs = new WebSocket(wsUrl);
+
+  mothershipWs.onopen = () => {
+    mothershipReconnectDelay = 1000;
+    // Authenticate via first message (not URL query)
+    if (mothershipWs?.readyState === WebSocket.OPEN) {
+      mothershipWs.send(JSON.stringify({ type: 'auth', payload: { token, tabId: tabId || `tab-${Date.now()}` } }));
+    }
+    // Register with workspace (from local) + forward provider credentials (from sync)
+    chrome.storage.local.get(['mothershipWorkspaceId'], (localData) => {
+      if (localData.mothershipWorkspaceId && mothershipWs?.readyState === WebSocket.OPEN) {
+        mothershipWs.send(JSON.stringify({ type: 'tab:register', payload: { workspaceId: localData.mothershipWorkspaceId } }));
+        chrome.storage.sync.get(['provider', 'deepseekApiKey', 'siliconflowApiKey', 'openrouterApiKey'], (syncData) => {
+          const provider = syncData.provider || 'deepseek';
+          const apiKey = syncData[`${provider}ApiKey`] || '';
+          if (apiKey && mothershipWs?.readyState === WebSocket.OPEN) {
+            mothershipWs.send(JSON.stringify({ type: 'provider:credentials', payload: { provider, apiKey } }));
+          }
+        });
+      }
+    });
+    broadcastMothershipStatus('connected');
+  };
+
+  mothershipWs.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      // Forward relevant WS messages to all tabs running regent
+      if (['events:cross', 'connected', 'context:results', 'agent:started', 'agent:stream', 'agent:tool_call', 'agent:error', 'agent:stopped', 'notification'].includes(msg.type)) {
+        chrome.tabs.query({}, (tabs) => {
+          for (const tab of tabs) {
+            chrome.tabs.sendMessage(tab.id, { type: 'mothershipEvent', data: msg }).catch(() => {});
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('Mothership WS message parse error:', err);
+    }
+  };
+
+  mothershipWs.onclose = () => {
+    mothershipWs = null;
+    broadcastMothershipStatus('disconnected');
+    // Exponential backoff reconnect
+    mothershipReconnectTimer = setTimeout(() => {
+      chrome.storage.local.get(['mothershipUrl', 'mothershipToken'], (data) => {
+        if (data.mothershipUrl && data.mothershipToken) {
+          mothershipConnect(data.mothershipUrl, data.mothershipToken);
+        }
+      });
+    }, mothershipReconnectDelay);
+    mothershipReconnectDelay = Math.min(mothershipReconnectDelay * 2, MOTHERSHIP_MAX_RECONNECT);
+  };
+
+  mothershipWs.onerror = () => {}; // onclose handles reconnect
+}
+
+function mothershipDisconnect() {
+  clearTimeout(mothershipReconnectTimer);
+  mothershipReconnectTimer = null;
+  if (mothershipWs) {
+    mothershipWs.onclose = null; // Prevent reconnect
+    mothershipWs.close();
+    mothershipWs = null;
+  }
+  broadcastMothershipStatus('disconnected');
+}
+
+function mothershipSend(payload) {
+  if (mothershipWs?.readyState === WebSocket.OPEN) {
+    mothershipWs.send(JSON.stringify(payload));
+    return true;
+  }
+  return false;
+}
+
+function broadcastMothershipStatus(status) {
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      chrome.tabs.sendMessage(tab.id, { type: 'mothershipStatus', status }).catch(() => {});
+    }
+  });
+}
+
+// Handle mothership messages from content scripts
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'mothershipConnect') {
+    mothershipConnect(request.url, request.token, sender?.tab?.id);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (request.action === 'mothershipDisconnect') {
+    mothershipDisconnect();
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (request.action === 'mothershipSend') {
+    const sent = mothershipSend(request.payload);
+    sendResponse({ sent });
+    return true;
+  }
+  if (request.action === 'mothershipStatus') {
+    sendResponse({ connected: mothershipWs?.readyState === WebSocket.OPEN });
+    return true;
+  }
+});
+
+// Auto-connect on service worker startup if credentials are stored
+chrome.storage.local.get(['mothershipUrl', 'mothershipToken'], (data) => {
+  if (data.mothershipUrl && data.mothershipToken) {
+    mothershipConnect(data.mothershipUrl, data.mothershipToken);
+  }
+});
+
 // Create context menu on extension installation
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({

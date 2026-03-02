@@ -69,6 +69,18 @@ class RegentOrchestratorClass {
 
     // Periodic meta-summary
     this._metaTimer = setInterval(() => this._generateMetaSummary(), META_SUMMARY_INTERVAL);
+
+    // Listen for mothership events (cross-session from other tabs/devices)
+    this._mothershipListener = (msg) => {
+      if (msg.type === 'mothershipEvent') this._onMothershipEvent(msg.data);
+      if (msg.type === 'mothershipStatus') this.sidebar.setConnectionStatus(msg.status);
+    };
+    chrome.runtime.onMessage.addListener(this._mothershipListener);
+
+    // Check initial mothership status
+    chrome.runtime.sendMessage({ action: 'mothershipStatus' }, (res) => {
+      this.sidebar.setConnectionStatus(res?.connected ? 'connected' : 'disconnected');
+    });
   }
 
   /** Create a sidecar for a session */
@@ -178,9 +190,39 @@ class RegentOrchestratorClass {
     this.sidebar.updateMeta(meta);
   }
 
+  /** Handle messages from mothership */
+  _onMothershipEvent(data) {
+    switch (data.type) {
+      case 'events:cross': {
+        const { sessionId, events } = data.payload || {};
+        if (sessionId && events?.length) this.sidebar.addCrossSessionEvents(sessionId, events);
+        break;
+      }
+      case 'context:results':
+        this.sidebar.showSearchResults(data.payload);
+        break;
+      case 'agent:started':
+        this.sidebar.handleAgentStarted(data.payload);
+        break;
+      case 'agent:stream':
+        this.sidebar.handleAgentStream(data.payload);
+        break;
+      case 'agent:tool_call':
+        this.sidebar.handleAgentToolCall(data.payload);
+        break;
+      case 'agent:error':
+        this.sidebar.handleAgentError(data.payload);
+        break;
+      case 'notification':
+        this.sidebar.showNotification(data.payload);
+        break;
+    }
+  }
+
   /** Destroy the entire regent system */
   destroy() {
     clearInterval(this._metaTimer);
+    if (this._mothershipListener) chrome.runtime.onMessage.removeListener(this._mothershipListener);
     this.detector.destroy();
     this.sidecars.forEach(s => s.destroy());
     this.sidecars.clear();
