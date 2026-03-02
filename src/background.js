@@ -334,16 +334,17 @@ function mothershipConnect(url, token, tabId) {
 
   mothershipWs.onopen = () => {
     mothershipReconnectDelay = 1000;
-    // Register with workspace + forward provider credentials
-    chrome.storage.sync.get(['mothershipWorkspaceId', 'provider', 'deepseekApiKey', 'siliconflowApiKey', 'openrouterApiKey'], (data) => {
-      if (data.mothershipWorkspaceId && mothershipWs?.readyState === WebSocket.OPEN) {
-        mothershipWs.send(JSON.stringify({ type: 'tab:register', payload: { workspaceId: data.mothershipWorkspaceId } }));
-        // Forward embedding provider credentials so server can generate embeddings
-        const provider = data.provider || 'deepseek';
-        const apiKey = data[`${provider}ApiKey`] || '';
-        if (apiKey) {
-          mothershipWs.send(JSON.stringify({ type: 'provider:credentials', payload: { provider, apiKey } }));
-        }
+    // Register with workspace (from local) + forward provider credentials (from sync)
+    chrome.storage.local.get(['mothershipWorkspaceId'], (localData) => {
+      if (localData.mothershipWorkspaceId && mothershipWs?.readyState === WebSocket.OPEN) {
+        mothershipWs.send(JSON.stringify({ type: 'tab:register', payload: { workspaceId: localData.mothershipWorkspaceId } }));
+        chrome.storage.sync.get(['provider', 'deepseekApiKey', 'siliconflowApiKey', 'openrouterApiKey'], (syncData) => {
+          const provider = syncData.provider || 'deepseek';
+          const apiKey = syncData[`${provider}ApiKey`] || '';
+          if (apiKey && mothershipWs?.readyState === WebSocket.OPEN) {
+            mothershipWs.send(JSON.stringify({ type: 'provider:credentials', payload: { provider, apiKey } }));
+          }
+        });
       }
     });
     broadcastMothershipStatus('connected');
@@ -368,7 +369,7 @@ function mothershipConnect(url, token, tabId) {
     broadcastMothershipStatus('disconnected');
     // Exponential backoff reconnect
     mothershipReconnectTimer = setTimeout(() => {
-      chrome.storage.sync.get(['mothershipUrl', 'mothershipToken'], (data) => {
+      chrome.storage.local.get(['mothershipUrl', 'mothershipToken'], (data) => {
         if (data.mothershipUrl && data.mothershipToken) {
           mothershipConnect(data.mothershipUrl, data.mothershipToken);
         }
@@ -431,7 +432,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Auto-connect on service worker startup if credentials are stored
-chrome.storage.sync.get(['mothershipUrl', 'mothershipToken'], (data) => {
+chrome.storage.local.get(['mothershipUrl', 'mothershipToken'], (data) => {
   if (data.mothershipUrl && data.mothershipToken) {
     mothershipConnect(data.mothershipUrl, data.mothershipToken);
   }

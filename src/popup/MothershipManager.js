@@ -24,13 +24,13 @@ export class MothershipManager {
     this.tokenInput.addEventListener('blur', () => this._fetchWorkspaces());
     this.workspaceSelect.addEventListener('change', () => {
       const wsId = this.workspaceSelect.value;
-      if (wsId) chrome.storage.sync.set({ mothershipWorkspaceId: wsId });
+      if (wsId) chrome.storage.local.set({ mothershipWorkspaceId: wsId });
     });
   }
 
   async _loadState() {
     const data = await new Promise(r =>
-      chrome.storage.sync.get(['mothershipUrl', 'mothershipToken', 'mothershipWorkspaceId'], r)
+      chrome.storage.local.get(['mothershipUrl', 'mothershipToken', 'mothershipWorkspaceId'], r)
     );
 
     if (data.mothershipUrl) this.urlInput.value = data.mothershipUrl;
@@ -121,7 +121,7 @@ export class MothershipManager {
       }
       this.workspaceSelect.style.display = this._workspaces.length > 1 ? '' : 'none';
 
-      chrome.storage.sync.set({ mothershipUrl: url, mothershipToken: token, mothershipWorkspaceId: workspaceId });
+      chrome.storage.local.set({ mothershipUrl: url, mothershipToken: token, mothershipWorkspaceId: workspaceId });
     } catch {
       this._showError('Cannot reach server');
       this.connectBtn.textContent = 'Connect';
@@ -143,7 +143,7 @@ export class MothershipManager {
 
   _disconnect() {
     chrome.runtime.sendMessage({ action: 'mothershipDisconnect' });
-    chrome.storage.sync.remove(['mothershipUrl', 'mothershipToken', 'mothershipWorkspaceId']);
+    chrome.storage.local.remove(['mothershipUrl', 'mothershipToken', 'mothershipWorkspaceId']);
     this.urlInput.value = '';
     this.tokenInput.value = '';
     this.workspaceSelect.innerHTML = '<option value="">Select workspace...</option>';

@@ -13,7 +13,19 @@ import { authMiddleware } from './middleware/auth.js';
 
 export const api = new Hono().basePath('/api/v1');
 
-api.use('*', cors());
+// CORS: allow Chrome extension origins + configurable allowed origins
+api.use('*', cors({
+  origin: (origin) => {
+    // Allow Chrome extension origins (chrome-extension://...)
+    if (origin?.startsWith('chrome-extension://')) return origin;
+    // Allow configured origins via ALLOWED_ORIGINS env var
+    const allowed = process.env.ALLOWED_ORIGINS?.split(',').map(s => s.trim()) || [];
+    if (allowed.includes(origin || '')) return origin!;
+    // Allow same-origin (no Origin header) for health checks etc.
+    if (!origin) return '*';
+    return null as any;
+  },
+}));
 
 // Health check
 api.get('/health', (c) => c.json({ status: 'ok', ts: Date.now() }));

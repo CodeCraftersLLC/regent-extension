@@ -34,6 +34,11 @@ inviteRoutes.post('/', async (c) => {
     expiresIn?: number; // hours
   }>();
 
+  // Validate role against allowed values
+  const validRoles = ['admin', 'member', 'viewer'] as const;
+  const inviteRole = validRoles.includes(role as any) ? role! : 'member';
+  const uses = Math.max(1, Math.min(maxUses || 1, 100));
+
   const code = nanoid(12);
   const expiresAt = expiresIn
     ? new Date(Date.now() + expiresIn * 60 * 60 * 1000).toISOString()
@@ -41,9 +46,9 @@ inviteRoutes.post('/', async (c) => {
 
   ctx.db.prepare(`INSERT INTO workspace_invites (code, workspace_id, created_by, role, max_uses, expires_at)
     VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(code, ctx.wsId, ctx.userId, role || 'member', maxUses || 1, expiresAt);
+    .run(code, ctx.wsId, ctx.userId, inviteRole, uses, expiresAt);
 
-  return c.json({ code, role: role || 'member', maxUses: maxUses || 1, expiresAt }, 201);
+  return c.json({ code, role: inviteRole, maxUses: uses, expiresAt }, 201);
 });
 
 /** POST /auth/pair — redeem an invite code (appended to auth routes) */
@@ -53,30 +58,30 @@ export async function redeemInvite(c: any) {
   if (!code) return c.json({ error: 'code required' }, 400);
 
   const db = getDb();
-  const invite = db.prepare('SELECT * FROM workspace_invites WHERE code = ?').get(code) as WorkspaceInvite | null;
 
-  if (!invite) return c.json({ error: 'Invalid invite code' }, 404);
-  if (invite.uses >= invite.max_uses) return c.json({ error: 'Invite code exhausted' }, 410);
-  if (invite.expires_at && new Date(invite.expires_at) < new Date()) return c.json({ error: 'Invite expired' }, 410);
+  // Atomic: validate + redeem inside a single transaction to prevent TOCTOU race
+  const result = db.transaction(() => {
+    const invite = db.prepare('SELECT * FROM workspace_invites WHERE code = ?').get(code) as WorkspaceInvite | null;
+    if (!invite) return { error: 'Invalid invite code', status: 404 };
+    if (invite.uses >= invite.max_uses) return { error: 'Invite code exhausted', status: 410 };
+    if (invite.expires_at && new Date(invite.expires_at) < new Date()) return { error: 'Invite expired', status: 410 };
 
-  // Check if already a member
-  const existing = db.prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
-    .get(invite.workspace_id, userId);
-  if (existing) return c.json({ error: 'Already a member' }, 409);
+    const existing = db.prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
+      .get(invite.workspace_id, userId);
+    if (existing) return { error: 'Already a member', status: 409 };
 
-  // Add member + increment uses
-  const tx = db.transaction(() => {
     db.prepare('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)')
       .run(invite.workspace_id, userId, invite.role);
     db.prepare('UPDATE workspace_invites SET uses = uses + 1 WHERE code = ?').run(code);
-  });
-  tx();
 
-  // Audit log
-  db.prepare('INSERT INTO audit_log (id, user_id, action, resource_type, resource_id) VALUES (?, ?, ?, ?, ?)')
-    .run(newId(), userId, 'workspace_joined', 'workspace', invite.workspace_id);
+    db.prepare('INSERT INTO audit_log (id, user_id, action, resource_type, resource_id) VALUES (?, ?, ?, ?, ?)')
+      .run(newId(), userId, 'workspace_joined', 'workspace', invite.workspace_id);
 
-  return c.json({ workspaceId: invite.workspace_id, role: invite.role });
+    return { workspaceId: invite.workspace_id, role: invite.role };
+  })();
+
+  if ('error' in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 }
 
 /** GET /workspaces/:wsId/invites — list active invites */

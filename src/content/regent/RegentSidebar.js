@@ -336,7 +336,7 @@ export class RegentSidebar {
 
   /** Fetch agents from mothership and populate the selector */
   _loadAgents() {
-    chrome.storage.sync.get(['mothershipUrl', 'mothershipToken', 'mothershipWorkspaceId'], async (data) => {
+    chrome.storage.local.get(['mothershipUrl', 'mothershipToken', 'mothershipWorkspaceId'], async (data) => {
       if (!data.mothershipUrl || !data.mothershipToken || !data.mothershipWorkspaceId) return;
       try {
         const res = await fetch(`${data.mothershipUrl}/api/v1/workspaces/${data.mothershipWorkspaceId}/agents`, {
