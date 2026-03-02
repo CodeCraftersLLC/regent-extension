@@ -7,7 +7,7 @@ import { addConnection, removeConnection, broadcastToWorkspace } from './registr
 import { handleTabRegister } from './handlers/tabRegister.js';
 import { handleEventsStore } from './handlers/eventsStore.js';
 import { handleContextQuery } from './handlers/contextQuery.js';
-import { handleAgentStart, handleAgentStop } from './handlers/agentControl.js';
+import { handleAgentStart, handleAgentStop, cleanupAgentListeners } from './handlers/agentControl.js';
 import { upsertProviderCredentials } from '../memory/embeddings.js';
 import type { Connection } from './registry.js';
 
@@ -72,6 +72,14 @@ export function attachWebSocket(server: Server) {
     };
     bus.on('events:new', onNewEvents);
 
+    // Listen for notifications targeted at this user
+    const onNotification = (data: { userId: string; notification: unknown }) => {
+      if (data.userId === conn.userId) {
+        send(ws, { type: 'notification', payload: data.notification });
+      }
+    };
+    bus.on('notification:new', onNotification);
+
     // Message dispatch
     ws.on('message', (raw) => {
       try {
@@ -116,6 +124,8 @@ export function attachWebSocket(server: Server) {
     ws.on('close', () => {
       clearInterval(heartbeat);
       bus.off('events:new', onNewEvents);
+      bus.off('notification:new', onNotification);
+      cleanupAgentListeners(conn);
       removeConnection(meta.userId, meta.tabId);
       log.info({ userId: meta.userId, tabId: meta.tabId }, 'WS disconnected');
     });

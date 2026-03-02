@@ -12,8 +12,16 @@ import { hybridSearch } from '../memory/search.js';
 import { log } from '../utils/logger.js';
 import type { Agent, AgentRun } from '../db/schema.js';
 
-/** Active runs that can be cancelled */
-const activeRuns = new Map<string, AbortController>();
+const MAX_TOOL_ROUNDS = 10;
+const MAX_OUTPUT_SIZE = 256 * 1024; // 256KB
+const MAX_TOOL_RESULT_SIZE = 4096;   // 4KB per tool result
+const ROUND_TIMEOUT = 120_000;       // 2 min per LLM round
+
+/** Active runs: stores both controller and startTime */
+const activeRuns = new Map<string, { controller: AbortController; startTime: number }>();
+
+/** Runs already finalized — prevents double finishRun */
+const finishedRuns = new Set<string>();
 
 export interface RunOptions {
   agent: Agent;
@@ -29,15 +37,13 @@ export async function startRun(opts: RunOptions): Promise<string> {
   const runId = newId();
   const startTime = Date.now();
 
-  // Create run record
   db.prepare(`INSERT INTO agent_runs (id, agent_id, workspace_id, user_id, input, session_id, status)
     VALUES (?, ?, ?, ?, ?, ?, 'running')`)
     .run(runId, agent.id, agent.workspace_id, userId, input, sessionId ?? null);
 
   const controller = new AbortController();
-  activeRuns.set(runId, controller);
+  activeRuns.set(runId, { controller, startTime });
 
-  // Run async (don't await — caller gets runId immediately)
   executeRun(runId, opts, controller.signal, startTime).catch((err) => {
     log.warn({ err, runId }, 'Agent run failed');
     finishRun(runId, null, 'failed', startTime);
@@ -48,11 +54,11 @@ export async function startRun(opts: RunOptions): Promise<string> {
 
 /** Cancel a running agent */
 export function cancelRun(runId: string): boolean {
-  const controller = activeRuns.get(runId);
-  if (!controller) return false;
-  controller.abort();
+  const entry = activeRuns.get(runId);
+  if (!entry) return false;
+  entry.controller.abort();
   activeRuns.delete(runId);
-  finishRun(runId, null, 'cancelled', 0);
+  finishRun(runId, null, 'cancelled', entry.startTime);
   return true;
 }
 
@@ -74,7 +80,6 @@ export function listRuns(agentId: string, limit = 20): AgentRun[] {
 async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, startTime: number) {
   const { agent, userId, input } = opts;
 
-  // Get provider credentials for LLM calls
   const creds = getProviderCredentials(userId);
   if (!creds) {
     bus.emit('agent:error', { runId, workspaceId: agent.workspace_id, error: 'No provider credentials configured' });
@@ -90,7 +95,9 @@ async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, 
       context = '\n\nRelevant context from past sessions:\n' +
         memories.map(m => `- ${m.entry.content}`).join('\n');
     }
-  } catch {}
+  } catch (err) {
+    log.debug({ err, runId }, 'Memory search failed, continuing without context');
+  }
 
   // Gather available MCP tools
   const mcpTools = getWorkspaceTools(agent.workspace_id);
@@ -101,11 +108,8 @@ async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, 
 
   // Build messages
   const messages: Array<{ role: string; content: string; tool_calls?: any[]; tool_call_id?: string }> = [];
-  if (agent.system_prompt) {
-    messages.push({ role: 'system', content: agent.system_prompt + context });
-  } else {
-    messages.push({ role: 'system', content: `You are a helpful agent.${context}` });
-  }
+  const systemContent = (agent.system_prompt || 'You are a helpful agent.') + context;
+  messages.push({ role: 'system', content: systemContent });
   messages.push({ role: 'user', content: input });
 
   // Determine API URL and model
@@ -120,14 +124,15 @@ async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, 
   const model = creds.model || defaults.model || 'deepseek-chat';
 
   let fullOutput = '';
-  const MAX_TOOL_ROUNDS = 10;
 
-  // Agentic loop: LLM call → tool calls → repeat
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal.aborted) return;
 
     const body: Record<string, unknown> = { model, messages, stream: true };
     if (toolDefs.length > 0) body.tools = toolDefs;
+
+    // Per-round timeout via combined signal
+    const roundAbort = AbortSignal.any([signal, AbortSignal.timeout(ROUND_TIMEOUT)]);
 
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -136,7 +141,7 @@ async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, 
         Authorization: `Bearer ${creds.api_key}`,
       },
       body: JSON.stringify(body),
-      signal,
+      signal: roundAbort,
     });
 
     if (!res.ok) {
@@ -146,14 +151,17 @@ async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, 
       return;
     }
 
-    // Parse streaming response
-    const { content, toolCalls } = await parseStream(res, runId, agent.workspace_id, signal);
+    const { content, toolCalls } = await parseStream(res, runId, agent.workspace_id, roundAbort);
     fullOutput += content;
 
-    // No tool calls → done
+    // Cap total output size
+    if (fullOutput.length > MAX_OUTPUT_SIZE) {
+      fullOutput = fullOutput.slice(0, MAX_OUTPUT_SIZE) + '\n[output truncated]';
+      break;
+    }
+
     if (!toolCalls.length) break;
 
-    // Add assistant message with tool calls
     messages.push({ role: 'assistant', content: content || '', tool_calls: toolCalls });
 
     // Execute tool calls
@@ -161,16 +169,29 @@ async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, 
       if (signal.aborted) return;
 
       const toolName = tc.function.name;
-      const toolArgs = JSON.parse(tc.function.arguments || '{}');
 
-      // Find which MCP server has this tool
+      // Safe JSON parse for tool arguments
+      let toolArgs: Record<string, unknown>;
+      try {
+        toolArgs = JSON.parse(tc.function.arguments || '{}');
+      } catch {
+        const errMsg = `Invalid tool arguments JSON for ${toolName}`;
+        log.debug({ runId, toolName, raw: tc.function.arguments }, errMsg);
+        messages.push({ role: 'tool', content: `Error: ${errMsg}`, tool_call_id: tc.id });
+        continue;
+      }
+
       const mcpTool = mcpTools.find(t => t.name === toolName);
       let toolResult: string;
 
       if (mcpTool) {
         try {
           const result = await callTool(mcpTool.serverId, toolName, toolArgs);
-          toolResult = result.content?.map(c => c.text || '').join('\n') || 'Success';
+          toolResult = result.content?.map((c: any) => c.text || '').join('\n') || 'Success';
+          // Truncate oversized tool results
+          if (toolResult.length > MAX_TOOL_RESULT_SIZE) {
+            toolResult = toolResult.slice(0, MAX_TOOL_RESULT_SIZE) + '\n[truncated]';
+          }
           bus.emit('agent:tool_call', {
             runId, workspaceId: agent.workspace_id,
             tool: toolName, input: toolArgs, output: toolResult,
@@ -193,7 +214,6 @@ async function executeRun(runId: string, opts: RunOptions, signal: AbortSignal, 
   activeRuns.delete(runId);
   finishRun(runId, fullOutput, 'completed', startTime);
 
-  // Emit completion
   bus.emit('agent:stream', { runId, workspaceId: agent.workspace_id, chunk: '', done: true, result: fullOutput });
 }
 
@@ -246,7 +266,9 @@ async function parseStream(
               if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
             }
           }
-        } catch {}
+        } catch (err) {
+          log.debug({ err, runId, payload: payload.slice(0, 200) }, 'SSE chunk parse error');
+        }
       }
     }
   } finally {
@@ -256,11 +278,16 @@ async function parseStream(
   return { content, toolCalls: toolCalls.filter(Boolean) };
 }
 
-/** Update run record in DB */
+/** Update run record in DB — guarded against double invocation */
 function finishRun(runId: string, output: string | null, status: AgentRun['status'], startTime: number) {
+  if (finishedRuns.has(runId)) return;
+  finishedRuns.add(runId);
+  // Evict from set after 60s to prevent unbounded growth
+  setTimeout(() => finishedRuns.delete(runId), 60_000);
+
   const db = getDb();
   const duration = startTime ? Date.now() - startTime : null;
-  db.prepare(`UPDATE agent_runs SET output = ?, status = ?, finished_at = datetime('now'), duration_ms = ? WHERE id = ?`)
+  db.prepare(`UPDATE agent_runs SET output = ?, status = ?, finished_at = datetime('now'), duration_ms = ? WHERE id = ? AND status = 'running'`)
     .run(output, status, duration, runId);
   activeRuns.delete(runId);
 }

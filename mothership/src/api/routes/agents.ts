@@ -7,6 +7,7 @@ import { getDb } from '../../db/index.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { createAgent, listAgents, getAgent, deleteAgent } from '../../agents/manager.js';
 import { startRun, cancelRun, getRun, listRuns } from '../../agents/runtime.js';
+import { checkRateLimit } from '../../utils/rateLimit.js';
 
 export const agentRoutes = new Hono();
 agentRoutes.use('*', authMiddleware);
@@ -35,7 +36,8 @@ agentRoutes.post('/', async (c) => {
   const { name, systemPrompt, mcpServers } = await c.req.json<{
     name: string; systemPrompt?: string; mcpServers?: string[];
   }>();
-  if (!name) return c.json({ error: 'name required' }, 400);
+  if (!name || name.length > 256) return c.json({ error: 'name required (max 256 chars)' }, 400);
+  if (systemPrompt && systemPrompt.length > 16384) return c.json({ error: 'systemPrompt too long (max 16KB)' }, 400);
 
   const agent = createAgent(ctx.wsId, { name, systemPrompt, mcpServers });
   return c.json(agent, 201);
@@ -60,7 +62,12 @@ agentRoutes.post('/:id/run', async (c) => {
   if (!agent || agent.workspace_id !== ctx.wsId) return c.json({ error: 'Agent not found' }, 404);
 
   const { input, sessionId } = await c.req.json<{ input: string; sessionId?: string }>();
-  if (!input) return c.json({ error: 'input required' }, 400);
+  if (!input || input.length > 32768) return c.json({ error: 'input required (max 32KB)' }, 400);
+
+  // Rate limit: token bucket per user
+  if (!checkRateLimit(ctx.userId, 'agent_runs', 5)) {
+    return c.json({ error: 'Rate limit exceeded' }, 429);
+  }
 
   const runId = await startRun({ agent, userId: ctx.userId, input, sessionId });
   return c.json({ runId, status: 'running' }, 201);
@@ -93,7 +100,13 @@ agentRoutes.post('/:id/runs/:rid/cancel', (c) => {
   const ctx = verifyMembership(c);
   if (!ctx) return c.json({ error: 'Not found' }, 404);
 
+  // Verify run belongs to this agent + workspace
+  const run = getRun(c.req.param('rid'));
+  if (!run || run.agent_id !== c.req.param('id') || run.workspace_id !== ctx.wsId) {
+    return c.json({ error: 'Run not found' }, 404);
+  }
+
   const ok = cancelRun(c.req.param('rid'));
-  if (!ok) return c.json({ error: 'Run not found or already finished' }, 404);
+  if (!ok) return c.json({ error: 'Run already finished' }, 404);
   return c.json({ ok: true });
 });

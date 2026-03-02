@@ -7,6 +7,33 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { log } from '../utils/logger.js';
 
+/** Allowed MCP commands — only these can be spawned via stdio transport */
+const ALLOWED_COMMANDS = new Set([
+  'npx', 'node', 'python', 'python3', 'uvx', 'docker',
+  'mcp-server-fetch', 'mcp-server-filesystem', 'mcp-server-github',
+  'mcp-server-postgres', 'mcp-server-sqlite', 'mcp-server-memory',
+]);
+
+/** Env vars that cannot be overridden (privilege escalation prevention) */
+const BLOCKED_ENV_KEYS = new Set([
+  'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS',
+  'DYLD_INSERT_LIBRARIES', 'PYTHONPATH', 'HOME', 'USER',
+]);
+
+/** Block requests to private/internal IP ranges (SSRF protection) */
+function validateUrl(url: string) {
+  const parsed = new URL(url);
+  const hostname = parsed.hostname;
+  if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|localhost$|::1$|\[::1\]$)/i.test(hostname)) {
+    throw new Error(`Blocked: private/internal address ${hostname}`);
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error(`Blocked: unsupported protocol ${parsed.protocol}`);
+  }
+}
+
+const REQUEST_TIMEOUT = 30_000;
+
 export interface McpTool {
   name: string;
   description: string;
@@ -58,16 +85,18 @@ export class McpClient {
 
   /** Connect to MCP server */
   async connect(): Promise<McpTool[]> {
-    if (this.config.transport === 'stdio') {
-      return this.connectStdio();
-    }
+    if (this.config.transport === 'stdio') return this.connectStdio();
     return this.connectHttp();
   }
 
   /** Disconnect from MCP server */
   disconnect() {
     if (this.process) {
-      this.process.kill();
+      const proc = this.process;
+      proc.kill('SIGTERM');
+      // Escalate to SIGKILL after 5s if process doesn't exit
+      const forceKill = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5000);
+      proc.once('exit', () => clearTimeout(forceKill));
       this.process = null;
     }
     this._connected = false;
@@ -77,8 +106,7 @@ export class McpClient {
 
   /** Call an MCP tool */
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    const result = await this.request('tools/call', { name, arguments: args });
-    return result as McpToolResult;
+    return await this.request('tools/call', { name, arguments: args }) as McpToolResult;
   }
 
   /** List tools from the server */
@@ -94,9 +122,24 @@ export class McpClient {
     const { command, args = [], env } = this.config;
     if (!command) throw new Error('stdio transport requires command');
 
+    // Security: validate command against allowlist
+    const baseName = command.split('/').pop()!;
+    if (!ALLOWED_COMMANDS.has(baseName)) {
+      throw new Error(`Blocked: command '${baseName}' not in allowlist. Allowed: ${[...ALLOWED_COMMANDS].join(', ')}`);
+    }
+
+    // Security: strip blocked env vars
+    const safeEnv: Record<string, string> = {};
+    if (env) {
+      for (const [k, v] of Object.entries(env)) {
+        if (!BLOCKED_ENV_KEYS.has(k.toUpperCase())) safeEnv[k] = v;
+        else log.warn({ key: k }, 'MCP: blocked env var override');
+      }
+    }
+
     this.process = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...safeEnv },
     });
 
     this.process.stdout!.on('data', (chunk: Buffer) => {
@@ -120,9 +163,7 @@ export class McpClient {
       clientInfo: { name: 'regent-mothership', version: '0.1.0' },
     });
 
-    // Send initialized notification
     this.notify('notifications/initialized', {});
-
     this._connected = true;
     return this.listTools();
   }
@@ -133,10 +174,11 @@ export class McpClient {
     const { url } = this.config;
     if (!url) throw new Error('HTTP transport requires url');
 
-    // For HTTP transport, we use direct JSON-RPC over HTTP POST
+    // Security: block private/internal URLs
+    validateUrl(url);
+
     this._connected = true;
 
-    // Initialize
     await this.httpRequest('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
@@ -160,13 +202,12 @@ export class McpClient {
       this.pending.set(id, { resolve, reject });
       this.process.stdin.write(JSON.stringify(req) + '\n');
 
-      // Timeout
       setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
           reject(new Error(`MCP timeout: ${method}`));
         }
-      }, 30_000);
+      }, REQUEST_TIMEOUT);
     });
   }
 
@@ -178,6 +219,7 @@ export class McpClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT),
     });
 
     if (!res.ok) throw new Error(`MCP HTTP error: ${res.status}`);

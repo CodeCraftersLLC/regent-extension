@@ -41,4 +41,10 @@ CREATE INDEX IF NOT EXISTS idx_agents_workspace ON agents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_runs_agent ON agent_runs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_runs_workspace ON agent_runs(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_user ON agent_runs(user_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_workspace ON mcp_servers(workspace_id);
+
+-- Auto-update timestamp trigger
+CREATE TRIGGER IF NOT EXISTS agents_updated_at AFTER UPDATE ON agents BEGIN
+  UPDATE agents SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
