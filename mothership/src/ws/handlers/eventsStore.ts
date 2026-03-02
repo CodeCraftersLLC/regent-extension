@@ -89,7 +89,9 @@ async function autoEmbed(userId: string, workspaceId: string, sessionId: string,
     try {
       const result = await embed(userId, content);
       if (result) embeddingBlob = vectorToBlob(result.embedding);
-    } catch {}
+    } catch (err) {
+      log.debug({ err, eventId: evt.id }, 'Embedding failed');
+    }
 
     try {
       insert.run(newId(), workspaceId, sessionId, evt.id, content, embeddingBlob);

@@ -23,9 +23,10 @@ CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory_entries BE
   INSERT INTO memory_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
 END;
 
--- Trigger: auto-update FTS on update
+-- Trigger: auto-update FTS on update (FTS5 requires delete+insert, not UPDATE)
 CREATE TRIGGER IF NOT EXISTS memory_fts_update AFTER UPDATE OF content ON memory_entries BEGIN
-  UPDATE memory_fts SET content = NEW.content WHERE rowid = NEW.rowid;
+  DELETE FROM memory_fts WHERE rowid = OLD.rowid;
+  INSERT INTO memory_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
 END;
 
 -- Trigger: auto-delete FTS on delete

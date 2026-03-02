@@ -20,7 +20,7 @@ const RRF_K = 60; // Standard RRF constant
 export function searchFTS(workspaceId: string, query: string, limit = 20): SearchResult[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT me.*, rank
+    SELECT me.id, me.workspace_id, me.session_id, me.event_id, me.content, me.source_type, me.created_at, rank
     FROM memory_fts fts
     JOIN memory_entries me ON me.rowid = fts.rowid
     WHERE memory_fts MATCH ? AND me.workspace_id = ?
@@ -43,7 +43,8 @@ export function searchVector(workspaceId: string, queryVec: number[], limit = 20
   // sqlite-vec: find nearest neighbors using vec_distance_cosine
   // We need memory_entries that have embeddings and match workspace
   const rows = db.prepare(`
-    SELECT me.*, vec_distance_cosine(me.embedding, ?) as distance
+    SELECT me.id, me.workspace_id, me.session_id, me.event_id, me.content, me.source_type, me.created_at,
+      vec_distance_cosine(me.embedding, ?) as distance
     FROM memory_entries me
     WHERE me.workspace_id = ? AND me.embedding IS NOT NULL
     ORDER BY distance ASC
