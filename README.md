@@ -1,4 +1,4 @@
-# 🚀 DeepSeekAI - Smart Web Assistant
+# DeepSeekAI - Smart Web Assistant + Regent Agent Orchestrator
 
 <div align="center">
 
@@ -12,167 +12,537 @@
 
 </div>
 
-## 📖 Introduction
+## Introduction
 
-DeepSeekAI is an unofficial, open-source browser extension that lets you summon a private DeepSeek-powered co-pilot anywhere on the web. Highlight text, tap a quick action, or press a shortcut to open a floating chat workspace that streams answers, shows reasoning traces, and remembers your preferred layout. The project is independent from DeepSeek, and you must provide your own API key (DeepSeek or any OpenAI-compatible endpoint).
+DeepSeekAI is an open-source browser extension that lets you summon a private AI co-pilot anywhere on the web. Highlight text, tap a quick action, or press a shortcut to open a floating chat workspace that streams answers, shows reasoning traces, and remembers your preferred layout.
 
-> **Note**: This extension is a community project and is not affiliated with DeepSeek. Keys, custom endpoints, and preferences are stored only in `chrome.storage.sync` on your device.
+**Regent Mothership** is the optional self-hosted backend that adds cross-session memory, multi-user workspaces, autonomous AI agents with MCP tool access, and real-time collaboration via WebSocket.
 
-### 🔌 Supported API Providers
+> **Note**: This extension is a community project and is not affiliated with DeepSeek. Keys, custom endpoints, and preferences are stored only in `chrome.storage.sync` on your device. The Mothership backend is entirely self-hosted — your data never leaves your infrastructure.
+
+### Supported API Providers
 - [DeepSeek](https://deepseek.com) (official endpoint)
-- [ByteDance Volcengine](https://www.volcengine.com/experience/ark?utm_term=202502dsinvite&ac=DSASUQY5&rc=OXTHJAF8)
-- [SiliconFlow](https://cloud.siliconflow.cn/i/lStn36vH)
+- [ByteDance Volcengine](https://www.volcengine.com/experience/ark)
+- [SiliconFlow](https://cloud.siliconflow.cn)
 - [OpenRouter](https://openrouter.ai/models)
-- [AiHubMix](https://aihubmix.com?aff=SmJB)
+- [AiHubMix](https://aihubmix.com)
 - [Tencent Cloud](https://cloud.tencent.com/document/product/1772/115969)
 - [IFlytek Star](https://training.xfyun.cn/modelService)
 - [Baidu Cloud](https://console.bce.baidu.com/qianfan/modelcenter/model/buildIn/list)
 - [Aliyun](https://bailian.console.aliyun.com/#/model-market)
-- Unlimited self-hosted/custom providers that expose an OpenAI-compatible `/chat/completions` endpoint
+- Any self-hosted/custom provider exposing an OpenAI-compatible `/chat/completions` endpoint
 
-## ✨ Feature Overview
+---
 
-### 🪄 Inline Assistants
-- Rich quick-action bubble appears beside any text selection with Chat, Copy, Translate (19 languages), Explain, Summarize, Email, and Analyze templates.
-- SelectionPreservationManager keeps the DOM range alive so the bubble never steals your highlight during double/triple clicks or context-menu usage.
-- Right-click context menu entry and toolbar popup both reuse the same flow, so highlighted text, manual prompts, and keyboard shortcuts share the session logic.
+## Architecture Overview
 
-### 🪟 Floating Workspace
-- `interactjs` gives the chat window magnetic drag + resize handles, snap animations, and a persistent minimize icon whose position is saved per user.
-- Toggle "Remember window size" to keep the workspace dimensions across sites, and "Pin window" to prevent accidental closes when clicking outside.
-- Minimized state, popup visibility, and icon location are tracked by `popupStateManager`, ensuring state survives selection changes.
-- Built-in input container includes auto-expanding textarea, send icon, abort/stop square, and smart focus rules so existing form inputs retain priority.
-- Each answer provides inline copy + regenerate controls; DeepSeek-R1/openrouter reasoning is rendered above the final response with a collapsible panel.
-- Auto-scroll follows the stream until you scroll manually. Scroll momentum + cooldown logic prevent janky jumps.
+```mermaid
+graph TB
+    subgraph "Browser Extension"
+        CS[Content Script<br/>Selection, Quick Actions, Popup]
+        BG[Background Service Worker<br/>API Proxy, WS Client, Commands]
+        PP[Popup Settings UI<br/>Providers, Keys, Mothership Config]
+    end
 
-### 🧠 Provider & Model Controls
-- Popup UI (English/Chinese) manages API keys per provider, preferred language (auto-detect or force output), and whether the selection bubble is enabled.
-- Add, rename, hide, or delete custom providers with their own base URL, display name, default model, and placeholder API-key links.
-- ModelManager stores multiple custom models per provider. Dropdowns support inline delete buttons, and forms auto-save via TempStateManager so unfinished entries survive popup reloads.
-- Configure a global custom system prompt used for every conversation, or override per quick action via templated prompts.
+    subgraph "Mothership Backend (Self-Hosted)"
+        API[Hono REST API<br/>/api/v1/*]
+        WS[WebSocket Gateway<br/>First-Message Auth, Heartbeat]
+        RT[Agent Runtime<br/>LLM Streaming, Tool Loop]
+        MCP[MCP Pool<br/>stdio + HTTP Transports]
+        MEM[Memory System<br/>FTS5 + sqlite-vec Hybrid Search]
+        DB[(SQLite + WAL<br/>better-sqlite3)]
+        BUS[EventBus<br/>In-Process Pub/Sub]
+    end
 
-### 📝 Rendering, Safety & UX Polishing
-- Markdown-It + highlight.js + KaTeX + DOMPurify ensure rich formatting, syntax highlighting, math rendering, and sanitized HTML.
-- Code blocks gain reusable “Copy” controls, while each AI block also exposes regenerate + share-ready text copy actions.
-- Streaming is proxied through the background service worker using modern `fetch` + `AbortController`, so stop/regenerate/shortcut commands instantly cut network traffic.
-- ThemeManager listens to `prefers-color-scheme` and toggles CSS variables to keep the popover and quick buttons readable in both modes.
+    subgraph "External Services"
+        LLM[LLM Provider<br/>DeepSeek / OpenRouter / etc.]
+        TOOL[MCP Servers<br/>Filesystem, GitHub, Postgres, etc.]
+    end
 
-### ⌨️ Shortcuts & Invocation Options
-- Two Chrome commands ship by default:
-  - `Ctrl/Cmd + Shift + Y` → toggle chat (new session)
-  - `Ctrl/Cmd + Shift + U` → show/hide chat (preserve session)
-- Use `chrome://extensions/shortcuts` (or the “Shortcut Settings” link inside the popup) to rebind commands.
-- Context menu entry (“DeepSeek AI”) sends the selected text directly, and the icon in the toolbar opens the configuration popup.
+    CS <-->|chrome.runtime.sendMessage| BG
+    PP -->|chrome.storage| BG
+    BG <-->|HTTP REST| API
+    BG <-->|WebSocket| WS
+    WS <--> BUS
+    API --> DB
+    WS --> DB
+    RT -->|SSE Stream| LLM
+    RT -->|JSON-RPC 2.0| MCP
+    MCP -->|stdio / HTTP| TOOL
+    RT <--> BUS
+    MEM --> DB
+    RT --> MEM
+```
 
-### 🔐 Privacy & Onboarding
-- On first install we open [`src/Instructions/Instructions.html`](src/Instructions/instructions.html), an offline-friendly Apple-style guide covering every screen.
-- `PRIVACY.html` documents exactly what is stored (API keys + user preferences in local browser storage) and reminds you that no remote server is involved.
-- DOMPurify sanitizes all rendered HTML, and no telemetry or analytics is collected.
+### Component Responsibilities
 
-## 🔄 How It Works
+| Component | Role |
+|---|---|
+| **Content Script** | Selection tracking, quick-action bubble, floating workspace, markdown rendering, theme |
+| **Background Worker** | Network proxy (fetch + AbortController), WS connection manager, keyboard commands |
+| **Popup UI** | Provider/model config, API keys, Mothership connection, language, system prompt |
+| **REST API** | Auth (register/login/revoke), workspaces, sessions, events, memory, agents, MCP, invites |
+| **WS Gateway** | Real-time bidirectional messaging with first-message auth, heartbeat, event broadcasting |
+| **Agent Runtime** | Agentic loop (max 10 rounds): LLM call → parse stream → execute MCP tools → repeat |
+| **MCP Pool** | Manages MCP server connections (stdio subprocess or HTTP), command allowlist, SSRF protection |
+| **Memory System** | Hybrid search: FTS5 full-text + sqlite-vec cosine similarity, merged via Reciprocal Rank Fusion |
+| **EventBus** | In-process EventEmitter routing agent streams, tool calls, events, and notifications to WS connections |
+
+---
+
+## Sequence Diagrams
+
+### Extension Chat Flow (Standalone, No Mothership)
 
 ```mermaid
 sequenceDiagram
     participant User
     participant Content as Content Script
-    participant Background
-    participant Provider
+    participant Background as Service Worker
+    participant Provider as LLM Provider
+
     User->>Content: Select text / press shortcut
-    Content->>Background: chrome.runtime.sendMessage({ action: "proxyRequest" | "getSettings" })
-    Background->>Provider: fetch(OpenAI-compatible endpoint)
-    Provider-->>Background: SSE / JSON chunks
-    Background-->>Content: streamResponse events (AbortController aware)
-    Content-->>User: Renders markdown, reasoning, quick actions
+    Content->>Background: sendMessage({ action: "proxyRequest", url, headers, body })
+    Background->>Provider: fetch(OpenAI-compatible /chat/completions)
+    Provider-->>Background: SSE stream (data: {...}\n\n)
+
+    loop Each SSE Chunk
+        Background-->>Content: sendMessage({ type: "streamResponse", data })
+        Content-->>User: Renders markdown incrementally
+    end
+
+    Note over Background,Provider: AbortController allows instant cancellation
 ```
 
-- `content/content.js` glues together selection tracking, quick actions, the popup workspace, markdown renderer, theme watcher, scroll manager, and focus manager.
-- `background.js` is the single network surface: it loads provider settings, streams responses, parses errors, handles aborts, manages commands/context menus, and opens onboarding tabs.
-- `popup/` houses the modular settings UI (ApiKeyManager, ProviderManager, ModelManager, SystemPromptManager, etc.) with i18n + autosave.
-- `Instructions/` exposes the offline guide viewed after installation.
+### Mothership Connection & Event Flow
 
-## 🚀 Installation & Build
+```mermaid
+sequenceDiagram
+    participant Ext as Extension (background.js)
+    participant GW as WS Gateway
+    participant Bus as EventBus
+    participant DB as SQLite
 
-### 1. Install from the store (recommended)
-- **Chrome**: [Chrome Web Store](https://chromewebstore.google.com/detail/bjjobdlpgglckcmhgmmecijpfobmcpap)
-- **Microsoft Edge**: enable “Allow extensions from other stores,” then install via the same Chrome Web Store listing above.
+    Ext->>GW: WebSocket connect (no token in URL)
+    GW-->>Ext: Connection accepted
 
-### 2. Manual installation / development flow
-```bash
-# Requirements: Node.js 18+, pnpm (or npm), and a Chromium-based browser
-pnpm install
-pnpm run build   # outputs the production bundle into dist/
+    Ext->>GW: { type: "auth", payload: { token, tabId } }
+    GW->>GW: verifyToken() + iat revocation check
+    GW-->>Ext: { type: "connected", payload: { userId, username } }
+
+    Ext->>GW: { type: "tab:register", payload: { workspaceId } }
+    GW->>GW: Bind connection to workspace
+
+    Ext->>GW: { type: "provider:credentials", payload: { provider, apiKey } }
+    GW->>DB: Upsert encrypted credentials
+    GW-->>Ext: { type: "provider:ack" }
+
+    Ext->>GW: { type: "events:store", payload: { sessionId, events: [...] } }
+    GW->>DB: Transaction: upsert session + insert events
+    GW->>Bus: emit("events:new")
+    Bus-->>GW: Forward to other tabs in same workspace
+    GW-->>Ext: { type: "events:cross", payload: { sessionId, events } }
 ```
 
-1. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick the `dist` folder.
-2. To ship a store package, run one of:
-   - `pnpm run build:zip` → `extension.zip`
-   - `pnpm run build:chrome` → `chrome-submission.zip`
-   - `pnpm run build:edge` → `edge-submission.zip`
-3. Upload the generated ZIP to the respective store dashboards.
+### Agent Execution Flow
 
-## 🧩 Setup & Daily Use
-1. Click the extension icon to open the popup.
-2. Choose a provider (or create a custom one with a name + base URL + default model) and paste its API key. Each provider keeps its own key and optional custom API URL.
-3. Pick or add a model. Non-DeepSeek providers require an explicit model ID; the UI will auto-prompt you to add one if missing.
-4. Configure behavior:
-   - Enable/disable the selection quick-action bubble.
-   - Choose automatic language detection or force a language from the dropdown (20+ locales).
-   - Toggle **Save Window Size**, **Pin Window**, and **Custom System Prompt**.
-   - Use the **Shortcut Settings** link to jump to Chrome’s command editor.
-5. Highlight text (or open the chat via shortcut) → the quick-action bubble appears → select Chat or a template. You can also open the floating window first and paste custom prompts.
-6. While streaming, use the stop square icon to abort. Each answer ends with copy + regenerate icons; reasoning blocks collapse/expand with one click.
-7. Need a refresher? Open the in-extension [usage guide](src/Instructions/instructions.html) or switch to the Simplified Chinese README linked at the top.
+```mermaid
+sequenceDiagram
+    participant Client as Extension / API Client
+    participant GW as WS Gateway
+    participant Ctrl as Agent Control Handler
+    participant RT as Agent Runtime
+    participant LLM as LLM Provider
+    participant MCP as MCP Server
+    participant Bus as EventBus
 
-## ⌨️ Shortcuts & Quick Actions
-- **Quick actions:**
-  - `Chat` → sends selection verbatim.
-  - `Copy` → copies selection without opening chat.
-  - `Translate` → language picker drives a prompt that asks DeepSeek to translate into your chosen target language.
-  - `Explain`, `Summarize`, `Email`, `Analyze` → curated prompts (with MBTI-flavored tone) for instant structured answers.
-- **Window commands:** `toggle-chat` destroys and recreates the session; `show-hide-chat` keeps the current context alive between invocations; `close-chat` is exposed internally for context menu cleanup.
-- **Context menu:** right-click → “DeepSeek AI” to push highlighted text directly into a new chat with a contextual greeting (morning/afternoon/evening).
+    Client->>GW: { type: "agent:start", payload: { agentId, input } }
+    GW->>Ctrl: handleAgentStart(conn, payload)
+    Ctrl->>RT: startRun({ agent, userId, input })
+    RT->>RT: INSERT agent_runs (status='running')
+    RT-->>Ctrl: runId
+    Ctrl-->>Client: { type: "agent:started", payload: { runId } }
+    Ctrl->>Bus: Subscribe to agent:stream, agent:tool_call, agent:error
 
-## 🏗️ Project Layout & Stack
+    RT->>RT: Fetch memory context (hybridSearch)
+    RT->>RT: Load MCP tools from pool
+
+    loop Agentic Loop (max 10 rounds)
+        RT->>LLM: POST /chat/completions (stream: true, tools: [...])
+        loop SSE Chunks
+            LLM-->>RT: data: { choices: [{ delta: { content, tool_calls } }] }
+            RT->>Bus: emit("agent:stream", { chunk })
+            Bus-->>Client: { type: "agent:stream", payload: { chunk, done: false } }
+        end
+
+        alt Tool Calls Present
+            RT->>MCP: callTool(serverId, name, args)
+            MCP-->>RT: { content: [{ text: "result" }] }
+            RT->>Bus: emit("agent:tool_call", { tool, input, output })
+            Bus-->>Client: { type: "agent:tool_call", payload: { tool, output } }
+            RT->>RT: Append tool result to messages, continue loop
+        else No Tool Calls
+            RT->>RT: Break loop
+        end
+    end
+
+    RT->>RT: UPDATE agent_runs (status='completed', output, duration_ms)
+    RT->>Bus: emit("agent:stream", { done: true, result })
+    Bus-->>Client: { type: "agent:stream", payload: { done: true, result } }
+```
+
+### Memory Hybrid Search (RAG)
+
+```mermaid
+sequenceDiagram
+    participant Caller as Agent Runtime / API
+    participant Search as Hybrid Search
+    participant FTS as FTS5 Engine
+    participant Vec as sqlite-vec
+    participant Embed as Embedding Provider
+
+    Caller->>Search: hybridSearch(userId, wsId, query, limit)
+
+    par Full-Text Search
+        Search->>FTS: MATCH sanitized query + BM25 rank
+        FTS-->>Search: FTS results with rank scores
+    and Vector Search
+        Search->>Embed: embed(userId, query)
+        Embed-->>Search: float[384] vector
+        Search->>Vec: vec_distance_cosine(embedding, queryVec)
+        Vec-->>Search: Vector results sorted by distance
+    end
+
+    Search->>Search: Reciprocal Rank Fusion (k=60)
+    Search-->>Caller: Merged results sorted by combined score
+```
+
+---
+
+## Feature Overview
+
+### Inline Assistants
+- Rich quick-action bubble beside any text selection: Chat, Copy, Translate (19 languages), Explain, Summarize, Email, Analyze.
+- SelectionPreservationManager keeps the DOM range alive so the bubble never steals your highlight.
+- Right-click context menu and toolbar popup share the same session logic.
+
+### Floating Workspace
+- Drag + resize via `interactjs` with snap animations and persistent minimize icon position.
+- Toggle "Remember window size" and "Pin window" for cross-site consistency.
+- Auto-expanding textarea, send/abort controls, copy + regenerate per answer, collapsible reasoning blocks.
+- Auto-scroll follows the stream until manual scroll, with momentum + cooldown logic.
+
+### Regent Agents (Mothership)
+- **Custom Agents**: Define agents with name, system prompt, and MCP server bindings.
+- **Agentic Tool Loop**: Up to 10 rounds of LLM reasoning + MCP tool execution per run.
+- **Memory-Augmented (RAG)**: Agents automatically fetch relevant context from past sessions via hybrid FTS5 + vector search.
+- **Real-Time Streaming**: Response chunks, tool calls, and errors stream to the UI via WebSocket.
+- **MCP Integration**: Connect external tools (filesystem, GitHub, Postgres, custom servers) via Model Context Protocol (stdio or HTTP transport).
+- **RBAC**: Owner > Admin > Member > Viewer role hierarchy per workspace.
+
+### Provider & Model Controls
+- Popup UI manages API keys per provider, language preference, selection bubble toggle.
+- Add/rename/delete custom providers with base URL, default model, and placeholder links.
+- Global custom system prompt, overridable per quick action.
+
+### Privacy & Security
+- Extension: API keys stored only in `chrome.storage.sync`. No telemetry. DOMPurify sanitizes all rendered HTML.
+- Mothership: JWT auth with token revocation, AES-256-GCM encryption for API keys at rest, RBAC, rate limiting, SSRF protection, MCP command allowlist, non-root Docker container.
+
+---
+
+## Project Layout
+
 ```
 .
-├── src/
-│   ├── manifest.json           # MV3 metadata & permissions
-│   ├── background.js           # service worker + proxy + commands
-│   ├── content/                # selection bubble, popup workspace, services, utils, styles
-│   ├── popup/                  # settings UI (managers, i18n, HTML)
-│   └── Instructions/           # onboarding guide (HTML + JS)
-├── dist/                       # build output (loaded during development/packaging)
-├── extension.zip               # generated via build:zip / build:chrome / build:edge
-├── webpack.config.js           # bundler config (Babel, CSS loader, copy plugin, terser)
-├── PRIVACY.html                # privacy policy
-└── README*.md                  # documentation (English + 简体中文)
+├── src/                              # Browser extension source
+│   ├── manifest.json                 # MV3 metadata & permissions
+│   ├── background.js                 # Service worker: API proxy, WS client, commands
+│   ├── content/                      # Content script layer
+│   │   ├── content.js                # Main orchestrator
+│   │   ├── components/               # SelectionManager, PopupManager, InputContainer, etc.
+│   │   ├── services/                 # apiService (background proxy)
+│   │   ├── utils/                    # markdownRenderer, themeManager, scrollManager, etc.
+│   │   ├── handlers/                 # MouseHandler
+│   │   ├── regent/                   # RegentOrchestrator, Sidecar, Detector, Sidebar, AI Service
+│   │   └── styles/                   # Extension CSS
+│   ├── popup/                        # Settings UI (managers, i18n, HTML)
+│   └── Instructions/                 # Onboarding guide
+│
+├── mothership/                       # Self-hosted backend
+│   ├── src/
+│   │   ├── index.ts                  # Server entry: Hono + WS + graceful shutdown
+│   │   ├── config.ts                 # Env var parsing (PORT, JWT_SECRET, DB_PATH, LOG_LEVEL)
+│   │   ├── api/
+│   │   │   ├── index.ts              # Route mounting, CORS config
+│   │   │   ├── middleware/            # auth.ts (JWT), workspace.ts (RBAC)
+│   │   │   └── routes/               # auth, workspaces, sessions, events, memory,
+│   │   │                             # agents, mcp, invites, notifications
+│   │   ├── ws/
+│   │   │   ├── gateway.ts            # WS upgrade, first-message auth, message dispatch
+│   │   │   ├── registry.ts           # Connection registry, workspace broadcast
+│   │   │   └── handlers/             # tabRegister, eventsStore, contextQuery, agentControl
+│   │   ├── agents/
+│   │   │   ├── manager.ts            # Agent CRUD (create, list, get, delete)
+│   │   │   └── runtime.ts            # Execution engine: LLM streaming + MCP tool loop
+│   │   ├── mcp/
+│   │   │   ├── client.ts             # JSON-RPC 2.0 MCP client (stdio + HTTP)
+│   │   │   └── pool.ts              # Connection pool, workspace tool aggregation
+│   │   ├── memory/
+│   │   │   ├── embeddings.ts         # Vector embedding + provider credential management
+│   │   │   ├── search.ts             # Hybrid search: FTS5 + sqlite-vec + RRF merge
+│   │   │   └── retention.ts          # Data retention scheduler
+│   │   ├── events/
+│   │   │   └── bus.ts                # In-process EventEmitter pub/sub
+│   │   ├── queue/
+│   │   │   └── laneQueue.ts          # Per-session serial execution queue
+│   │   ├── db/
+│   │   │   ├── index.ts              # SQLite init, atomic migrations, WAL mode
+│   │   │   ├── schema.ts             # TypeScript type definitions
+│   │   │   └── migrations/           # 001_foundation → 004_multiuser
+│   │   └── utils/                    # crypto, id, logger, rateLimit
+│   ├── Dockerfile                    # Multi-stage Node 22, non-root user
+│   ├── docker-compose.yml            # mothership + Caddy reverse proxy
+│   ├── Caddyfile                     # Auto-HTTPS reverse proxy config
+│   └── .env.example                  # Environment variable template
+│
+├── webpack.config.js                 # Extension bundler config
+├── PRIVACY.html                      # Privacy policy
+└── README.md
 ```
 
-**Key dependencies:** `interactjs`, `markdown-it`, `highlight.js`, `DOMPurify`, `katex`, `clipboard`, `perfect-scrollbar`, and `openai` (for payload typing) plus the MV3 APIs exposed by Chrome/Edge.
+---
 
-## 🔒 Privacy & Security
-- API keys, preferences, quick-action states, and minimized icon positions live only inside `chrome.storage.sync`.
-- Text is sent solely to the provider endpoint you configure. There are no intermediary servers, analytics calls, or remote logs.
-- The offline [privacy policy](PRIVACY.html) inside the repo details data handling, and DOMPurify removes any potentially unsafe markup before rendering.
+## Installation & Setup
 
-## 🤝 Contributing
-Contributions are welcome—bug reports, documentation fixes, and feature proposals all help the community.
+### 1. Extension (Chrome / Edge)
+
+**From the store (recommended):**
+- **Chrome**: [Chrome Web Store](https://chromewebstore.google.com/detail/bjjobdlpgglckcmhgmmecijpfobmcpap)
+- **Edge**: Enable "Allow extensions from other stores" then install via Chrome Web Store.
+
+**Manual / development build:**
+```bash
+# Requirements: Node.js 18+, pnpm (or npm)
+pnpm install
+pnpm run build          # outputs to dist/
+```
+
+1. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `dist/`.
+2. Click the extension icon → configure your API provider and key.
+3. Highlight text or press `Ctrl+Shift+Y` to start chatting.
+
+### 2. Mothership Backend (Optional)
+
+The Mothership enables cross-session memory, agents, workspaces, and real-time sync. The extension works fully standalone without it.
+
+#### Option A: Docker (Recommended for Production)
+
+```bash
+cd mothership
+
+# 1. Create your environment file
+cp .env.example .env
+# Edit .env — set JWT_SECRET to a long random string:
+#   JWT_SECRET=$(openssl rand -hex 32)
+
+# 2. Start the stack (mothership + Caddy reverse proxy)
+docker compose up -d
+
+# 3. Verify it's running
+curl http://localhost:3001/api/v1/health
+# → {"status":"ok","ts":...}
+```
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `JWT_SECRET` | **(required)** | Secret for signing JWT tokens. Use `openssl rand -hex 32` |
+| `PORT` | `3001` | HTTP server port |
+| `DB_PATH` | `./data/mothership.db` | SQLite database file path |
+| `LOG_LEVEL` | `info` | Pino log level: `debug`, `info`, `warn`, `error` |
+| `EXTENSION_ID` | *(optional)* | Pin CORS to a specific Chrome extension ID |
+| `ALLOWED_ORIGINS` | *(optional)* | Comma-separated allowed CORS origins |
+
+#### Option B: Local Development (No Docker)
+
+```bash
+cd mothership
+
+# 1. Install dependencies
+npm install
+
+# 2. Run in dev mode (auto-reload on file changes)
+npm run dev
+# → Mothership listening on http://localhost:3001
+# → [WARN] No JWT_SECRET set — using random ephemeral secret
+
+# Or build and run production:
+npm run build
+JWT_SECRET=your-secret-here npm start
+```
+
+**TypeScript commands:**
+```bash
+npm run typecheck   # Type validation only (no emit)
+npm run build       # Compile TypeScript → dist/
+npm start           # Run compiled dist/index.js
+npm run dev         # Watch mode via tsx
+```
+
+### 3. Connect Extension to Mothership
+
+Once the backend is running:
+
+1. **Register a user** (first-time only):
+   ```bash
+   curl -X POST http://localhost:3001/api/v1/auth/register \
+     -H 'Content-Type: application/json' \
+     -d '{"username":"yourname","password":"your-password-here"}'
+   # → {"id":"...","username":"yourname","token":"eyJ...","workspaceId":"..."}
+   ```
+
+2. **Or generate an API token** (if already registered):
+   ```bash
+   curl -X POST http://localhost:3001/api/v1/auth/token/generate \
+     -H 'Content-Type: application/json' \
+     -d '{"username":"yourname","password":"your-password-here"}'
+   # → {"token":"eyJ...","expiresIn":"30d"}
+   ```
+
+3. **Configure the extension:**
+   - Click the extension icon → scroll to **Mothership** section.
+   - **URL**: `http://localhost:3001` (or your public domain).
+   - **Token**: Paste the JWT token from step 1 or 2.
+   - Click **Connect**. The status dot turns green.
+
+4. **What happens on connect:**
+   - The extension opens a WebSocket to `ws://localhost:3001/ws`.
+   - Authenticates via first-message auth (token never in URL).
+   - Registers with the workspace and forwards provider credentials.
+   - Session events stream to the backend for memory storage.
+   - Cross-tab events sync in real-time.
+
+---
+
+## Agent System
+
+Agents are custom AI assistants that run server-side with access to MCP tools and workspace memory.
+
+### Agent Runtime
+
+The agent runtime is a **custom-built TypeScript execution engine** — no external agent framework is used. It implements:
+
+- **Agentic tool loop**: Up to 10 rounds of `LLM call → parse SSE stream → execute tool calls → feed results back`.
+- **OpenAI-compatible streaming**: Works with any provider supporting `stream: true` and function calling.
+- **MCP tool integration**: Tools from connected MCP servers are passed as OpenAI function definitions. Tool results feed back into the conversation.
+- **Memory-augmented context (RAG)**: Before each run, the runtime performs a hybrid search (FTS5 + vector cosine similarity with RRF merge) to inject relevant past context into the system prompt.
+- **Real-time streaming**: Every text chunk and tool call is emitted via EventBus → WebSocket → client.
+- **Cancellation**: `AbortController`-based, with per-round 2-minute timeout and overall safety timeout.
+
+### Runtime Limits
+
+| Limit | Value |
+|---|---|
+| Max tool rounds | 10 |
+| Max output size | 256 KB |
+| Max tool result size | 4 KB |
+| Per-round timeout | 2 min |
+| Agent runs rate limit | 5/min per user |
+
+### API Endpoints
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/workspaces/:wsId/agents` | viewer+ | List agents |
+| `POST` | `/workspaces/:wsId/agents` | admin+ | Create agent |
+| `DELETE` | `/workspaces/:wsId/agents/:id` | admin+ | Delete agent |
+| `POST` | `/workspaces/:wsId/agents/:id/run` | member+ | Start a run |
+| `GET` | `/workspaces/:wsId/agents/:id/runs` | viewer+ | List runs |
+| `GET` | `/workspaces/:wsId/agents/:id/runs/:rid` | viewer+ | Get run details |
+| `POST` | `/workspaces/:wsId/agents/:id/runs/:rid/cancel` | member+ | Cancel a run |
+
+### WebSocket Messages
+
+**Client → Server:**
+```json
+{ "type": "agent:start", "payload": { "agentId": "...", "input": "Research X", "sessionId": "..." } }
+{ "type": "agent:stop",  "payload": { "runId": "..." } }
+```
+
+**Server → Client:**
+```json
+{ "type": "agent:started",   "payload": { "runId": "...", "agentId": "..." } }
+{ "type": "agent:stream",    "payload": { "runId": "...", "chunk": "text", "done": false } }
+{ "type": "agent:tool_call", "payload": { "runId": "...", "tool": "name", "input": {}, "output": "..." } }
+{ "type": "agent:stream",    "payload": { "runId": "...", "chunk": "", "done": true, "result": "..." } }
+{ "type": "agent:error",     "payload": { "runId": "...", "error": "message" } }
+```
+
+### MCP Server Setup
+
+Connect external tools via Model Context Protocol:
+
+```bash
+# Example: connect a filesystem MCP server
+curl -X POST http://localhost:3001/api/v1/workspaces/WS_ID/mcp \
+  -H 'Authorization: Bearer TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "filesystem",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+  }'
+```
+
+**Allowed commands** (security allowlist): `npx`, `node`, `python`, `python3`, `uvx`, `docker`, and `mcp-server-*` prefixed binaries. Absolute paths, dangerous interpreter flags (`-e`, `--eval`, `-c`), and private network URLs are blocked.
+
+---
+
+## Database Schema
+
+Four migrations build the schema incrementally:
+
+| Migration | Tables |
+|---|---|
+| `001_foundation` | `users`, `sessions`, `events` |
+| `002_memory_fts` | `memory_entries` (with embedding blob), `memory_fts` (FTS5 virtual table) |
+| `003_agents_mcp` | `agents`, `agent_runs`, `mcp_servers` |
+| `004_multiuser` | `workspaces`, `workspace_members`, `invites`, `notifications`, provider credentials on `users` |
+
+SQLite runs in WAL mode with `busy_timeout=5000` and `foreign_keys=ON`. The `sqlite-vec` extension enables cosine similarity search on embedding vectors.
+
+---
+
+## Shortcuts & Quick Actions
+- **Quick actions:** Chat, Copy, Translate (19 languages), Explain, Summarize, Email, Analyze.
+- **Keyboard shortcuts:**
+  - `Ctrl/Cmd + Shift + Y` → Toggle chat (new session)
+  - `Ctrl/Cmd + Shift + U` → Show/hide chat (preserve session)
+- **Context menu:** Right-click → "DeepSeek AI" to chat with selected text.
+- Rebind via `chrome://extensions/shortcuts`.
+
+## Contributing
+
+Contributions are welcome — bug reports, documentation fixes, and feature proposals all help.
 
 1. Fork the repo and create a branch (`git checkout -b feature/my-update`).
 2. Install deps + build once (`pnpm install && pnpm run build`).
-3. Make your changes, keep them focused, and run `pnpm run build` again to ensure `dist/` refreshes.
-4. Submit a Pull Request describing the change, affected files, and any verification notes.
+3. For Mothership changes: `cd mothership && npm install && npm run typecheck`.
+4. Submit a Pull Request describing the change and verification notes.
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
 
-## 📮 Contact
+## Contact
 
 - Issues: [GitHub Issues](https://github.com/DeepLifeStudio/DeepSeekAI/issues)
 - Email: [1024jianghu@gmail.com](mailto:1024jianghu@gmail.com)
 - Twitter/X: [@DeepLifeStudio](https://x.com/DeepLifeStudio)
 
 <div align="center">
-<h3>If this project helps you, please consider giving it a ⭐️</h3>
+<h3>If this project helps you, please consider giving it a star</h3>
 </div>
