@@ -14,9 +14,15 @@ export function hashPassword(password: string): string {
 }
 
 export function verifyPassword(password: string, stored: string): boolean {
+  if (!stored || !stored.includes(':')) return false;
   const [salt, hash] = stored.split(':');
-  const candidate = scryptSync(password, salt, 64);
-  return timingSafeEqual(candidate, Buffer.from(hash, 'hex'));
+  if (!salt || !hash) return false;
+  try {
+    const candidate = scryptSync(password, salt, 64);
+    return timingSafeEqual(candidate, Buffer.from(hash, 'hex'));
+  } catch {
+    return false;
+  }
 }
 
 // --- JWT ---

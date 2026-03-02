@@ -366,7 +366,9 @@ function mothershipConnect(url, token, tabId) {
           }
         });
       }
-    } catch {}
+    } catch (err) {
+      console.warn('Mothership WS message parse error:', err);
+    }
   };
 
   mothershipWs.onclose = () => {

@@ -46,7 +46,7 @@ export function broadcastToWorkspace(workspaceId: string, message: object, exclu
   const payload = JSON.stringify(message);
   for (const conn of getWorkspaceConnections(workspaceId)) {
     if (conn.tabId !== excludeTabId && conn.ws.readyState === 1) {
-      conn.ws.send(payload);
+      try { conn.ws.send(payload); } catch { /* connection already closing */ }
     }
   }
 }

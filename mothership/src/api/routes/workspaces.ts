@@ -34,8 +34,12 @@ workspaceRoutes.post('/', async (c) => {
 
   const db = getDb();
   const id = newId();
-  db.prepare('INSERT INTO workspaces (id, name, owner_id) VALUES (?, ?, ?)').run(id, name, userId);
-  db.prepare('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)').run(id, userId, 'owner');
+
+  // Atomic: create workspace + owner membership in one transaction
+  db.transaction(() => {
+    db.prepare('INSERT INTO workspaces (id, name, owner_id) VALUES (?, ?, ?)').run(id, name, userId);
+    db.prepare('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)').run(id, userId, 'owner');
+  })();
 
   return c.json({ id, name, owner_id: userId }, 201);
 });

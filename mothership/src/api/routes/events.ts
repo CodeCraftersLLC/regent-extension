@@ -41,16 +41,17 @@ eventRoutes.post('/bulk', async (c) => {
     return c.json({ error: 'Too many events (max 200 per batch)' }, 400);
   }
 
-  const existingSession = ctx.db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
-  if (!existingSession) {
-    ctx.db.prepare(`INSERT INTO sessions (id, workspace_id, status) VALUES (?, ?, 'active')`).run(sessionId, ctx.wsId);
-  }
-
   const insert = ctx.db.prepare(`INSERT INTO events (id, session_id, workspace_id, title, summary, importance, message_index)
     VALUES (?, ?, ?, ?, ?, ?, ?)`);
 
+  // Atomic: upsert session + store all events in one transaction
   const stored: RegentEvent[] = [];
   ctx.db.transaction(() => {
+    const existingSession = ctx.db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
+    if (!existingSession) {
+      ctx.db.prepare(`INSERT INTO sessions (id, workspace_id, status) VALUES (?, ?, 'active')`).run(sessionId, ctx.wsId);
+    }
+
     for (const evt of events) {
       const id = newId();
       insert.run(id, sessionId, ctx.wsId, evt.title, evt.summary, evt.importance || 'medium', evt.messageIndex ?? null);

@@ -42,8 +42,11 @@ function runMigrations(db: Database.Database) {
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = readFileSync(resolve(migrationsDir, file), 'utf-8');
-    db.exec(sql);
-    db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(file);
+    // Atomic: apply migration SQL + record in single transaction
+    db.transaction(() => {
+      db.exec(sql);
+      db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(file);
+    })();
     log.info('Applied migration: %s', file);
   }
 }

@@ -23,12 +23,12 @@ attachWebSocket(server as any);
 
 // Graceful shutdown
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, () => {
+  process.on(sig, async () => {
     log.info('Shutting down...');
     stopRetention();
-    disconnectAll();
+    await disconnectAll();
     closeDb();
-    server.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     process.exit(0);
   });
 }

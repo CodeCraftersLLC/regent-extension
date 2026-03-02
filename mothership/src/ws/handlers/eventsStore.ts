@@ -36,22 +36,21 @@ export function handleEventsStore(conn: Connection, payload: EventPayload) {
   enqueue(key, async () => {
     const db = getDb();
 
-    // Upsert session
-    const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
-    if (!existing) {
-      db.prepare(`INSERT INTO sessions (id, workspace_id, name, url, hostname, status)
-        VALUES (?, ?, ?, ?, ?, 'active')`)
-        .run(sessionId, workspaceId, payload.sessionName ?? null, payload.url ?? null, payload.hostname ?? null);
-    } else {
-      db.prepare("UPDATE sessions SET updated_at = datetime('now') WHERE id = ?").run(sessionId);
-    }
-
-    // Store events
     const insert = db.prepare(`INSERT INTO events (id, session_id, workspace_id, title, summary, importance, message_index, source_tab_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
 
+    // Atomic: upsert session + store all events in one transaction
     const stored: RegentEvent[] = [];
-    const tx = db.transaction(() => {
+    db.transaction(() => {
+      const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
+      if (!existing) {
+        db.prepare(`INSERT INTO sessions (id, workspace_id, name, url, hostname, status)
+          VALUES (?, ?, ?, ?, ?, 'active')`)
+          .run(sessionId, workspaceId, payload.sessionName ?? null, payload.url ?? null, payload.hostname ?? null);
+      } else {
+        db.prepare("UPDATE sessions SET updated_at = datetime('now') WHERE id = ?").run(sessionId);
+      }
+
       for (const evt of events) {
         const id = newId();
         insert.run(id, sessionId, workspaceId, evt.title, evt.summary, evt.importance || 'medium', evt.messageIndex ?? null, conn.tabId);
@@ -63,8 +62,7 @@ export function handleEventsStore(conn: Connection, payload: EventPayload) {
           source_tab_id: conn.tabId, created_at: new Date().toISOString(),
         });
       }
-    });
-    tx();
+    })();
 
     log.info({ sessionId, count: stored.length }, 'Events stored');
 
@@ -72,7 +70,9 @@ export function handleEventsStore(conn: Connection, payload: EventPayload) {
     bus.emit('events:new', { workspaceId, sessionId, events: stored, sourceTabId: conn.tabId });
 
     // Auto-embed events into memory_entries (fire-and-forget, non-blocking)
-    autoEmbed(conn.userId, workspaceId, sessionId, stored).catch(() => {});
+    autoEmbed(conn.userId, workspaceId, sessionId, stored).catch((err) => {
+      log.warn({ err, sessionId }, 'Auto-embed failed');
+    });
   });
 }
 

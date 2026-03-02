@@ -7,13 +7,15 @@
  * Each key chains promises so tasks run sequentially.
  */
 
+import { log } from '../utils/logger.js';
+
 const lanes = new Map<string, Promise<void>>();
 
 export function enqueue(key: string, task: () => Promise<void>): Promise<void> {
   const prev = lanes.get(key) ?? Promise.resolve();
   const next = prev
     .then(task)
-    .catch(() => {}) // Don't let one failure block the lane
+    .catch((err) => { log.error({ err, lane: key }, 'Lane task failed'); })
     .finally(() => {
       // Clean up lane if nothing else queued
       if (lanes.get(key) === next) lanes.delete(key);
