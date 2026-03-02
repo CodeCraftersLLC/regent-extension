@@ -52,6 +52,10 @@ export class RegentSidebar {
         <button class="regent-collapse-btn" title="Collapse sidebar">◀</button>
         <div class="regent-expand-indicator">▶</div>
       </div>
+      <div class="regent-search" style="display:none">
+        <input class="regent-search-input" type="text" placeholder="Search memory..." />
+      </div>
+      <div class="regent-search-results" style="display:none"></div>
       <div class="regent-meta" style="display:none"></div>
       <div class="regent-sessions">
         <div class="regent-empty">
@@ -66,6 +70,23 @@ export class RegentSidebar {
     // Cache references
     this.sessionsContainer = this.sidebar.querySelector('.regent-sessions');
     this.metaEl = this.sidebar.querySelector('.regent-meta');
+    this._searchEl = this.sidebar.querySelector('.regent-search');
+    this._searchInput = this.sidebar.querySelector('.regent-search-input');
+    this._searchResultsEl = this.sidebar.querySelector('.regent-search-results');
+    this._searchDebounce = null;
+
+    // Search input — debounced query via WS
+    this._searchInput.addEventListener('input', () => {
+      clearTimeout(this._searchDebounce);
+      const q = this._searchInput.value.trim();
+      if (!q) { this._hideSearchResults(); return; }
+      this._searchDebounce = setTimeout(() => {
+        chrome.runtime.sendMessage({
+          action: 'mothershipSend',
+          payload: { type: 'context:query', payload: { query: q, limit: 15 } },
+        }).catch(() => {});
+      }, 400);
+    });
 
     // Collapse/expand
     const collapseBtn = this.sidebar.querySelector('.regent-collapse-btn');
@@ -273,6 +294,42 @@ export class RegentSidebar {
     const connected = status === 'connected';
     dot.classList.toggle('connected', connected);
     dot.title = `Mothership: ${connected ? 'connected' : 'disconnected'}`;
+    // Show/hide search bar based on connection
+    if (this._searchEl) this._searchEl.style.display = connected ? '' : 'none';
+    if (!connected) this._hideSearchResults();
+  }
+
+  /** Display search results from mothership context:results */
+  showSearchResults(results) {
+    if (!results?.length) {
+      this._searchResultsEl.innerHTML = '<div class="regent-search-empty">No results found</div>';
+      this._searchResultsEl.style.display = '';
+      return;
+    }
+
+    this._searchResultsEl.innerHTML = '';
+    for (const r of results) {
+      const el = document.createElement('div');
+      el.className = 'regent-search-result';
+      const time = r.created_at ? new Date(r.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+      el.innerHTML = `
+        <div class="search-result-content">${this._escapeHtml(r.content.slice(0, 120))}</div>
+        <div class="search-result-meta">
+          <span class="search-result-type">${r.source_type || 'event'}</span>
+          <span class="search-result-time">${time}</span>
+        </div>
+      `;
+      this._searchResultsEl.appendChild(el);
+    }
+    this._searchResultsEl.style.display = '';
+  }
+
+  /** Hide search results panel */
+  _hideSearchResults() {
+    if (this._searchResultsEl) {
+      this._searchResultsEl.style.display = 'none';
+      this._searchResultsEl.innerHTML = '';
+    }
   }
 
   /** Display cross-session events received from mothership (other tabs/devices) */

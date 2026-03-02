@@ -334,10 +334,16 @@ function mothershipConnect(url, token, tabId) {
 
   mothershipWs.onopen = () => {
     mothershipReconnectDelay = 1000;
-    // Register with workspace
-    chrome.storage.sync.get('mothershipWorkspaceId', (data) => {
+    // Register with workspace + forward provider credentials
+    chrome.storage.sync.get(['mothershipWorkspaceId', 'provider', 'deepseekApiKey', 'siliconflowApiKey', 'openrouterApiKey'], (data) => {
       if (data.mothershipWorkspaceId && mothershipWs?.readyState === WebSocket.OPEN) {
         mothershipWs.send(JSON.stringify({ type: 'tab:register', payload: { workspaceId: data.mothershipWorkspaceId } }));
+        // Forward embedding provider credentials so server can generate embeddings
+        const provider = data.provider || 'deepseek';
+        const apiKey = data[`${provider}ApiKey`] || '';
+        if (apiKey) {
+          mothershipWs.send(JSON.stringify({ type: 'provider:credentials', payload: { provider, apiKey } }));
+        }
       }
     });
     broadcastMothershipStatus('connected');
@@ -346,8 +352,8 @@ function mothershipConnect(url, token, tabId) {
   mothershipWs.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
-      // Forward cross-session events to all tabs running regent
-      if (msg.type === 'events:cross' || msg.type === 'connected') {
+      // Forward relevant WS messages to all tabs running regent
+      if (['events:cross', 'connected', 'context:results'].includes(msg.type)) {
         chrome.tabs.query({}, (tabs) => {
           for (const tab of tabs) {
             chrome.tabs.sendMessage(tab.id, { type: 'mothershipEvent', data: msg }).catch(() => {});

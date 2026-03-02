@@ -6,6 +6,8 @@ import { bus } from '../events/bus.js';
 import { addConnection, removeConnection, broadcastToWorkspace } from './registry.js';
 import { handleTabRegister } from './handlers/tabRegister.js';
 import { handleEventsStore } from './handlers/eventsStore.js';
+import { handleContextQuery } from './handlers/contextQuery.js';
+import { upsertProviderCredentials } from '../memory/embeddings.js';
 import type { Connection } from './registry.js';
 
 const HEARTBEAT_INTERVAL = 30_000;
@@ -79,6 +81,13 @@ export function attachWebSocket(server: Server) {
             break;
           case 'events:store':
             handleEventsStore(conn, msg.payload as any);
+            break;
+          case 'context:query':
+            handleContextQuery(conn, { ...(msg.payload as any), correlationId: msg.correlationId }, send);
+            break;
+          case 'provider:credentials':
+            upsertProviderCredentials(conn.userId, msg.payload as any);
+            send(ws, { type: 'provider:ack', correlationId: msg.correlationId });
             break;
           case 'ping':
             send(ws, { type: 'pong', ts: Date.now() });

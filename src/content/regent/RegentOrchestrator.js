@@ -190,14 +190,16 @@ class RegentOrchestratorClass {
     this.sidebar.updateMeta(meta);
   }
 
-  /** Handle cross-session events from mothership */
+  /** Handle messages from mothership */
   _onMothershipEvent(data) {
-    if (data.type !== 'events:cross') return;
-    const { sessionId, events } = data.payload || {};
-    if (!sessionId || !events?.length) return;
-
-    // Display cross-session events in sidebar (no DOM element to scroll to)
-    this.sidebar.addCrossSessionEvents(sessionId, events);
+    if (data.type === 'events:cross') {
+      const { sessionId, events } = data.payload || {};
+      if (sessionId && events?.length) {
+        this.sidebar.addCrossSessionEvents(sessionId, events);
+      }
+    } else if (data.type === 'context:results') {
+      this.sidebar.showSearchResults(data.payload);
+    }
   }
 
   /** Destroy the entire regent system */

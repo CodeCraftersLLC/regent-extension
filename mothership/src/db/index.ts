@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as sqliteVec from 'sqlite-vec';
 import { config } from '../config.js';
 import { log } from '../utils/logger.js';
 
@@ -17,8 +18,11 @@ export function getDb(): Database.Database {
   _db.pragma('foreign_keys = ON');
   _db.pragma('busy_timeout = 5000');
 
+  // Load sqlite-vec extension for vector search
+  sqliteVec.load(_db);
+
   runMigrations(_db);
-  log.info('Database initialized at %s', config.dbPath);
+  log.info('Database initialized at %s (sqlite-vec loaded)', config.dbPath);
   return _db;
 }
 
@@ -33,7 +37,7 @@ function runMigrations(db: Database.Database) {
   );
 
   const migrationsDir = resolve(__dirname, 'migrations');
-  const files = ['001_foundation.sql']; // Explicit ordering
+  const files = ['001_foundation.sql', '002_memory_fts.sql'];
 
   for (const file of files) {
     if (applied.has(file)) continue;

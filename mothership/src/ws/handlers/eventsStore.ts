@@ -2,6 +2,7 @@ import { getDb } from '../../db/index.js';
 import { newId } from '../../utils/id.js';
 import { bus } from '../../events/bus.js';
 import { enqueue, laneKey } from '../../queue/laneQueue.js';
+import { embed, vectorToBlob } from '../../memory/embeddings.js';
 import { log } from '../../utils/logger.js';
 import type { Connection } from '../registry.js';
 import type { RegentEvent } from '../../db/schema.js';
@@ -69,5 +70,31 @@ export function handleEventsStore(conn: Connection, payload: EventPayload) {
 
     // Broadcast to other tabs in workspace
     bus.emit('events:new', { workspaceId, sessionId, events: stored, sourceTabId: conn.tabId });
+
+    // Auto-embed events into memory_entries (fire-and-forget, non-blocking)
+    autoEmbed(conn.userId, workspaceId, sessionId, stored).catch(() => {});
   });
+}
+
+/** Create memory entries with embeddings for stored events */
+async function autoEmbed(userId: string, workspaceId: string, sessionId: string, events: RegentEvent[]) {
+  const db = getDb();
+  const insert = db.prepare(`INSERT INTO memory_entries (id, workspace_id, session_id, event_id, content, embedding, source_type)
+    VALUES (?, ?, ?, ?, ?, ?, 'event')`);
+
+  for (const evt of events) {
+    const content = `${evt.title}: ${evt.summary}`;
+    let embeddingBlob: Buffer | null = null;
+
+    try {
+      const result = await embed(userId, content);
+      if (result) embeddingBlob = vectorToBlob(result.embedding);
+    } catch {}
+
+    try {
+      insert.run(newId(), workspaceId, sessionId, evt.id, content, embeddingBlob);
+    } catch (err) {
+      log.debug({ err, eventId: evt.id }, 'Memory entry insert failed');
+    }
+  }
 }

@@ -64,3 +64,23 @@ export interface AuditEntry {
   detail: string | null;
   created_at: string;
 }
+
+export interface MemoryEntry {
+  id: string;
+  workspace_id: string;
+  session_id: string | null;
+  event_id: string | null;
+  content: string;
+  embedding: Buffer | null;
+  source_type: 'event' | 'note' | 'summary';
+  created_at: string;
+}
+
+export interface ProviderCredential {
+  user_id: string;
+  provider: string;
+  api_key: string;
+  api_url: string | null;
+  model: string | null;
+  updated_at: string;
+}
