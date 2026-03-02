@@ -120,3 +120,34 @@ export interface McpServer {
   created_at: string;
   updated_at: string;
 }
+
+export interface WorkspaceInvite {
+  code: string;
+  workspace_id: string;
+  created_by: string;
+  role: 'admin' | 'member' | 'viewer';
+  max_uses: number;
+  uses: number;
+  expires_at: string | null;
+  created_at: string;
+}
+
+export interface RateLimit {
+  user_id: string;
+  bucket: string;
+  tokens: number;
+  max_tokens: number;
+  refill_rate: number;
+  last_refill: string;
+}
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  workspace_id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  read: number;
+  created_at: string;
+}

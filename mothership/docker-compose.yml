@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  mothership:
+    build: .
+    ports:
+      - "3001:3001"
+    volumes:
+      - mothership-data:/data
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - DB_PATH=/data/mothership.db
+      - LOG_LEVEL=info
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - mothership
+    restart: unless-stopped
+
+volumes:
+  mothership-data:
+  caddy-data:
+  caddy-config:

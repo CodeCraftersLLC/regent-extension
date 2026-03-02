@@ -59,11 +59,13 @@ export class RegentSidebar {
       <div class="regent-agent-panel" style="display:none">
         <div class="regent-agent-header">
           <span class="regent-agent-title">Agents</span>
+          <select class="regent-agent-select"><option value="">Select agent...</option></select>
           <button class="regent-agent-run-btn" title="Run agent">Run</button>
         </div>
         <input class="regent-agent-input" type="text" placeholder="Describe a task..." />
         <div class="regent-agent-output"></div>
       </div>
+      <div class="regent-notifications" style="display:none"></div>
       <div class="regent-meta" style="display:none"></div>
       <div class="regent-sessions">
         <div class="regent-empty">
@@ -83,18 +85,21 @@ export class RegentSidebar {
     this._searchResultsEl = this.sidebar.querySelector('.regent-search-results');
     this._searchDebounce = null;
     this._agentPanel = this.sidebar.querySelector('.regent-agent-panel');
+    this._agentSelect = this.sidebar.querySelector('.regent-agent-select');
     this._agentInput = this.sidebar.querySelector('.regent-agent-input');
     this._agentOutput = this.sidebar.querySelector('.regent-agent-output');
+    this._notificationsEl = this.sidebar.querySelector('.regent-notifications');
     this._currentRunId = null;
 
-    // Agent run button
+    // Agent run button — includes selected agentId
     this.sidebar.querySelector('.regent-agent-run-btn').addEventListener('click', () => {
+      const agentId = this._agentSelect.value;
       const task = this._agentInput.value.trim();
-      if (!task) return;
+      if (!agentId || !task) return;
       this._agentOutput.textContent = 'Starting agent...';
       chrome.runtime.sendMessage({
         action: 'mothershipSend',
-        payload: { type: 'agent:start', payload: { input: task } },
+        payload: { type: 'agent:start', payload: { agentId, input: task } },
       }).catch(() => {});
     });
 
@@ -320,10 +325,49 @@ export class RegentSidebar {
     // Show/hide search bar and agent panel based on connection
     if (this._searchEl) this._searchEl.style.display = connected ? '' : 'none';
     if (this._agentPanel) this._agentPanel.style.display = connected ? '' : 'none';
+    if (this._notificationsEl) this._notificationsEl.style.display = connected ? '' : 'none';
     if (!connected) {
       this._hideSearchResults();
       if (this._agentOutput) this._agentOutput.textContent = '';
     }
+    // Fetch agents list when connected
+    if (connected) this._loadAgents();
+  }
+
+  /** Fetch agents from mothership and populate the selector */
+  _loadAgents() {
+    chrome.storage.sync.get(['mothershipUrl', 'mothershipToken', 'mothershipWorkspaceId'], async (data) => {
+      if (!data.mothershipUrl || !data.mothershipToken || !data.mothershipWorkspaceId) return;
+      try {
+        const res = await fetch(`${data.mothershipUrl}/api/v1/workspaces/${data.mothershipWorkspaceId}/agents`, {
+          headers: { Authorization: `Bearer ${data.mothershipToken}` },
+        });
+        if (!res.ok) return;
+        const agents = await res.json();
+        if (!this._agentSelect) return;
+        this._agentSelect.innerHTML = '<option value="">Select agent...</option>';
+        for (const a of agents) {
+          const opt = document.createElement('option');
+          opt.value = a.id;
+          opt.textContent = a.name;
+          this._agentSelect.appendChild(opt);
+        }
+      } catch {}
+    });
+  }
+
+  /** Show a notification toast in the sidebar */
+  showNotification(notification) {
+    if (!this._notificationsEl) return;
+    const toast = document.createElement('div');
+    toast.className = 'regent-notification-toast';
+    toast.innerHTML = `
+      <div class="notification-title">${this._escapeHtml(notification.title)}</div>
+      ${notification.body ? `<div class="notification-body">${this._escapeHtml(notification.body)}</div>` : ''}
+    `;
+    this._notificationsEl.appendChild(toast);
+    // Auto-remove after 8 seconds
+    setTimeout(() => toast.remove(), 8000);
   }
 
   /** Handle agent streaming chunks */

@@ -7,6 +7,9 @@ import { eventRoutes } from './routes/events.js';
 import { memoryRoutes } from './routes/memory.js';
 import { agentRoutes } from './routes/agents.js';
 import { mcpRoutes } from './routes/mcp.js';
+import { inviteRoutes, redeemInvite } from './routes/invites.js';
+import { notificationRoutes } from './routes/notifications.js';
+import { authMiddleware } from './middleware/auth.js';
 
 export const api = new Hono().basePath('/api/v1');
 
@@ -23,3 +26,8 @@ api.route('/workspaces/:wsId/events', eventRoutes);
 api.route('/workspaces/:wsId/memory', memoryRoutes);
 api.route('/workspaces/:wsId/agents', agentRoutes);
 api.route('/workspaces/:wsId/mcp', mcpRoutes);
+api.route('/workspaces/:wsId/invites', inviteRoutes);
+api.route('/notifications', notificationRoutes);
+
+// Invite redemption (under auth)
+api.post('/auth/pair', authMiddleware, redeemInvite);

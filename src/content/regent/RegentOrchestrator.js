@@ -213,6 +213,9 @@ class RegentOrchestratorClass {
       case 'agent:error':
         this.sidebar.handleAgentError(data.payload);
         break;
+      case 'notification':
+        this.sidebar.showNotification(data.payload);
+        break;
     }
   }
 
