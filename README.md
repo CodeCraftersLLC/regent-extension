@@ -83,7 +83,7 @@ graph TB
 | **Popup UI** | Provider/model config, API keys, Mothership connection, language, system prompt |
 | **REST API** | Auth (register/login/revoke), workspaces, sessions, events, memory, agents, MCP, invites |
 | **WS Gateway** | Real-time bidirectional messaging with first-message auth, heartbeat, event broadcasting |
-| **Agent Runtime** | Agentic loop (max 10 rounds): LLM call → parse stream → execute MCP tools → repeat |
+| **Agent Runtime** | Mastra-powered agentic loop (max 10 steps): LLM stream → tool calls → MCP execution → repeat |
 | **MCP Pool** | Manages MCP server connections (stdio subprocess or HTTP), command allowlist, SSRF protection |
 | **Memory System** | Hybrid search: FTS5 full-text + sqlite-vec cosine similarity, merged via Reciprocal Rank Fusion |
 | **EventBus** | In-process EventEmitter routing agent streams, tool calls, events, and notifications to WS connections |
@@ -144,16 +144,17 @@ sequenceDiagram
     GW-->>Ext: { type: "events:cross", payload: { sessionId, events } }
 ```
 
-### Agent Execution Flow
+### Agent Execution Flow (Mastra-Powered)
 
 ```mermaid
 sequenceDiagram
     participant Client as Extension / API Client
     participant GW as WS Gateway
     participant Ctrl as Agent Control Handler
-    participant RT as Agent Runtime
+    participant RT as Agent Runtime (Orchestration Shell)
+    participant MA as Mastra Agent
     participant LLM as LLM Provider
-    participant MCP as MCP Server
+    participant MCP as MCP Server (via Bridge)
     participant Bus as EventBus
 
     Client->>GW: { type: "agent:start", payload: { agentId, input } }
@@ -165,24 +166,27 @@ sequenceDiagram
     Ctrl->>Bus: Subscribe to agent:stream, agent:tool_call, agent:error
 
     RT->>RT: Fetch memory context (hybridSearch)
-    RT->>RT: Load MCP tools from pool
+    RT->>RT: Bridge MCP tools → Mastra createTool()
+    RT->>MA: new Agent({ model, tools, instructions })
+    RT->>MA: agent.stream(input, { maxSteps: 10, abortSignal })
 
-    loop Agentic Loop (max 10 rounds)
-        RT->>LLM: POST /chat/completions (stream: true, tools: [...])
-        loop SSE Chunks
-            LLM-->>RT: data: { choices: [{ delta: { content, tool_calls } }] }
+    loop Mastra Agentic Loop (max 10 steps)
+        MA->>LLM: Stream request (provider-native format)
+        loop Text Chunks
+            LLM-->>MA: text-delta events
+            MA-->>RT: textStream chunks
             RT->>Bus: emit("agent:stream", { chunk })
             Bus-->>Client: { type: "agent:stream", payload: { chunk, done: false } }
         end
 
         alt Tool Calls Present
-            RT->>MCP: callTool(serverId, name, args)
-            MCP-->>RT: { content: [{ text: "result" }] }
+            MA->>MCP: execute bridged tool (via our security layer)
+            MCP-->>MA: tool result (truncated to 4KB)
+            MA->>MA: Append tool result, continue loop
             RT->>Bus: emit("agent:tool_call", { tool, input, output })
             Bus-->>Client: { type: "agent:tool_call", payload: { tool, output } }
-            RT->>RT: Append tool result to messages, continue loop
         else No Tool Calls
-            RT->>RT: Break loop
+            MA->>MA: Complete
         end
     end
 
@@ -284,7 +288,9 @@ sequenceDiagram
 │   │   │   └── handlers/             # tabRegister, eventsStore, contextQuery, agentControl
 │   │   ├── agents/
 │   │   │   ├── manager.ts            # Agent CRUD (create, list, get, delete)
-│   │   │   └── runtime.ts            # Execution engine: LLM streaming + MCP tool loop
+│   │   │   ├── runtime.ts            # Orchestration shell + Mastra Agent execution
+│   │   │   ├── mcpBridge.ts          # MCP tools → Mastra createTool() bridge
+│   │   │   └── modelResolver.ts      # DB credentials → Mastra model config
 │   │   ├── mcp/
 │   │   │   ├── client.ts             # JSON-RPC 2.0 MCP client (stdio + HTTP)
 │   │   │   └── pool.ts              # Connection pool, workspace tool aggregation
@@ -430,16 +436,34 @@ Once the backend is running:
 
 Agents are custom AI assistants that run server-side with access to MCP tools and workspace memory.
 
-### Agent Runtime
+### Agent Runtime (Powered by Mastra)
 
-The agent runtime is a **custom-built TypeScript execution engine** — no external agent framework is used. It implements:
+The agent runtime uses **[Mastra](https://mastra.ai)** (`@mastra/core`) as the inner execution engine, wrapped in our orchestration shell for DB persistence, bus events, safety limits, and MCP security:
 
-- **Agentic tool loop**: Up to 10 rounds of `LLM call → parse SSE stream → execute tool calls → feed results back`.
-- **OpenAI-compatible streaming**: Works with any provider supporting `stream: true` and function calling.
-- **MCP tool integration**: Tools from connected MCP servers are passed as OpenAI function definitions. Tool results feed back into the conversation.
-- **Memory-augmented context (RAG)**: Before each run, the runtime performs a hybrid search (FTS5 + vector cosine similarity with RRF merge) to inject relevant past context into the system prompt.
-- **Real-time streaming**: Every text chunk and tool call is emitted via EventBus → WebSocket → client.
-- **Cancellation**: `AbortController`-based, with per-round 2-minute timeout and overall safety timeout.
+```
+┌─ Orchestration Shell (our code) ──────────────────────┐
+│  startRun() → DB record, AbortController               │
+│  cancelRun() → abort, update DB                         │
+│  finishRun() → write output/status/duration to DB       │
+│                                                          │
+│  ┌─ Mastra Agent (inner engine) ──────────────────────┐ │
+│  │  Agent({ model, tools, instructions })              │ │
+│  │  .stream(input, { maxSteps, abortSignal })          │ │
+│  │  textStream → bus.emit('agent:stream')              │ │
+│  └─────────────────────────────────────────────────────┘ │
+│                                                          │
+│  ┌─ MCP Security Layer (unchanged) ───────────────────┐ │
+│  │  Command allowlist, SSRF protection, path traversal │ │
+│  │  → Bridged to Mastra tools via createTool()         │ │
+│  └─────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
+```
+
+- **Mastra handles**: LLM streaming, SSE parsing, tool call assembly, provider abstraction (800+ models / 47 providers), thinking/reasoning support.
+- **We handle**: DB persistence, EventBus → WebSocket streaming, MCP security (command allowlist, SSRF, path traversal), safety limits (output caps, tool result truncation), run lifecycle tracking.
+- **MCP Bridge**: Our `mcpBridge.ts` wraps MCP tools as Mastra `createTool()` instances. The MCP security layer (`mcp/client.ts`) remains unchanged.
+- **Model Resolver**: `modelResolver.ts` maps encrypted DB credentials to Mastra `OpenAICompatibleConfig` objects, supporting DeepSeek, OpenRouter, SiliconFlow, OpenAI, and any custom endpoint.
+- **Memory-augmented context (RAG)**: Before each run, hybrid search (FTS5 + vector cosine + RRF) injects relevant past context into the agent's instructions.
 
 ### Runtime Limits
 

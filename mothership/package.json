@@ -11,13 +11,15 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@mastra/core": "^1.8.0",
     "better-sqlite3": "^11.7.0",
     "hono": "^4.6.0",
     "jose": "^5.9.0",
     "nanoid": "^5.0.9",
     "pino": "^9.5.0",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
